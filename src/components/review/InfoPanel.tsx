@@ -103,6 +103,7 @@ export function InfoPanel({ row, home, selected, onToggle, onDrill }: Props) {
             <span className={`badge ${verdictClass(row.final)}`}>{verdictJa(row.final)}</span>{" "}
             <span className="muted tiny">{sourceJa(row.final)}</span>
             {row.final.reason && <div className="tiny">{row.final.reason}</div>}
+            {row.final.warning && <div className="tiny warn">{row.final.warning}</div>}
           </dd>
           <dt>元 CLI</dt>
           <dd>

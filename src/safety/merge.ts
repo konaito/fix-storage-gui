@@ -1,6 +1,7 @@
 import { CATEGORY, type CategoryId } from "../cli-core/categories";
 import type { Label } from "../cli-core/classify";
 import type { AiJudgement, AiVerdict } from "../ai/provider";
+import { gitWarning } from "../lib/labels";
 
 export interface FinalVerdict {
   verdict: AiVerdict;
@@ -9,6 +10,8 @@ export interface FinalVerdict {
   locked: boolean;
   /** "pending": the user uses AI judgement and the AI has not judged this item yet. */
   source: "hard-block" | "cli" | "ai" | "pending";
+  /** Shown next to the verdict, apart from `reason`: a folder that holds a Git repository further down (#80). */
+  warning?: string;
 }
 
 export interface MergeInput {
@@ -18,6 +21,8 @@ export interface MergeInput {
   ai?: AiJudgement;
   /** Signed-in users with ChatGPT plan usage: show no deletion verdict until the AI has judged the item (#12). */
   requireAi?: boolean;
+  /** One Git repository found inside a folder that is not blocked (ScanItem.gitInside). */
+  gitInside?: string | null;
 }
 
 const FROM_CLI: Record<Label["verdict"], AiVerdict> = {
@@ -34,7 +39,14 @@ export const PENDING_REASON = "AI がまだ判定していません";
  * The AI can make things stricter, but never looser than the rules allow.
  * With `requireAi`, an item the AI has not judged gets no deletion verdict ("pending", not selectable).
  */
-export function mergeVerdict({ blocked, category, cli, ai, requireAi }: MergeInput): FinalVerdict {
+export function mergeVerdict(input: MergeInput): FinalVerdict {
+  const f = baseVerdict(input);
+  if (!input.gitInside || f.locked) return f;
+  // A folder with a repository inside is never "safe": it stays selectable, but only by hand (#80).
+  return { ...f, verdict: f.verdict === "safe" ? "caution" : f.verdict, warning: gitWarning(input.gitInside) };
+}
+
+function baseVerdict({ blocked, category, cli, ai, requireAi }: MergeInput): FinalVerdict {
   if (blocked) return { verdict: "keep", reason: blocked, locked: true, source: "hard-block" };
   if (cli.verdict === "system") return { verdict: "keep", reason: cli.reason || "システムやツールが管理しています", locked: true, source: "cli" };
   if (!ai && requireAi) return { verdict: "caution", reason: PENDING_REASON, locked: false, source: "pending" };

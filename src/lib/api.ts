@@ -11,6 +11,8 @@ export interface ScanItem {
   lastUsedMs: number | null;
   /** Hard block reason from the Rust side. Such items can never be moved to the Trash. */
   blocked: string | null;
+  /** For a folder that is not blocked: one Git repository found inside it (#80). Selectable, with a warning. */
+  gitInside: string | null;
 }
 
 export interface ScanResult {

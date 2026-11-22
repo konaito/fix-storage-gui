@@ -90,7 +90,10 @@ export function TrashStep({ rows, trashing, progress, onBack, onDeselect, onConf
           {rows.map((r) => (
             <li key={r.path} className={r.final.verdict}>
               <span className={`badge ${r.final.verdict}`}>{AI_VERDICT_JA[r.final.verdict]}</span>
-              <span className="confirm-path">{r.path}</span>
+              <span className="confirm-path">
+                {r.path}
+                {r.final.warning && <span className="tiny warn block">{r.final.warning}</span>}
+              </span>
               <span className="muted num">{formatBytes(r.size)}</span>
               <button type="button" className="link" onClick={() => {
                   // The list changed, so the confirmation has to be given again.

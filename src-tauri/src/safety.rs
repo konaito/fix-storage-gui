@@ -7,7 +7,7 @@
 
 use crate::roots::{CategoryId, Root};
 use std::io::ErrorKind;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 /// Lexically normalises an absolute path. Returns None for relative paths or paths with `..`.
 pub fn normalize(path: &str) -> Option<String> {
@@ -275,18 +275,18 @@ const GIT_SEARCH_DEPTH: usize = 3;
 /// so the worst case is 400 × this many directory entries.
 const GIT_SEARCH_ENTRIES: usize = 2000;
 
-/// Whether a `.git` (folder or file, any case) is in `dir` or in a folder up to [`GIT_SEARCH_DEPTH`]
-/// levels below it. Breadth first: every folder of a level is first asked for `.git` directly (not
-/// counted), and only then are the folders listed, so a big folder cannot hide a repository next to it.
-/// Links met on the way down are not followed, folders that cannot be read are skipped, folders for
-/// which `skip` is true are not entered, and after [`GIT_SEARCH_ENTRIES`] listed entries the search
-/// stops and answers false.
-fn holds_git_repo(dir: &Path, skip: impl Fn(&str) -> bool) -> bool {
+/// The first folder found holding a `.git` (folder or file, any case): `dir` itself or a folder up to
+/// [`GIT_SEARCH_DEPTH`] levels below it. Breadth first: every folder of a level is first asked for `.git`
+/// directly (not counted), and only then are the folders listed, so a big folder cannot hide a repository
+/// next to it. Links met on the way down are not followed, folders that cannot be read are skipped,
+/// folders for which `skip` is true are not entered, and after [`GIT_SEARCH_ENTRIES`] listed entries the
+/// search stops and answers None.
+fn find_git_repo(dir: &Path, skip: impl Fn(&str) -> bool) -> Option<PathBuf> {
     let mut level = vec![dir.to_path_buf()];
     let mut seen = 0usize;
     for depth in 0..=GIT_SEARCH_DEPTH {
-        if level.iter().any(|d| d.join(".git").symlink_metadata().is_ok()) {
-            return true;
+        if let Some(d) = level.iter().find(|d| d.join(".git").symlink_metadata().is_ok()) {
+            return Some(d.clone());
         }
         if depth == GIT_SEARCH_DEPTH {
             break;
@@ -297,10 +297,10 @@ fn holds_git_repo(dir: &Path, skip: impl Fn(&str) -> bool) -> bool {
             for e in entries.flatten() {
                 seen += 1;
                 if seen > GIT_SEARCH_ENTRIES {
-                    return false;
+                    return None;
                 }
                 if e.file_name().to_string_lossy().eq_ignore_ascii_case(".git") {
-                    return true;
+                    return Some(d.clone());
                 }
                 if e.file_type().is_ok_and(|t| t.is_dir()) {
                     let child = e.path();
@@ -312,7 +312,18 @@ fn holds_git_repo(dir: &Path, skip: impl Fn(&str) -> bool) -> bool {
         }
         level = next;
     }
-    false
+    None
+}
+
+/// What the guard says about one path: whether it is blocked, and whether it is a folder that holds a
+/// Git repository further down (allowed, but worth a warning).
+#[derive(Debug, Default, PartialEq)]
+pub struct Verdict {
+    /// Why the path must never be moved to the Trash, or None when it may be.
+    pub blocked: Option<String>,
+    /// For a folder that is not blocked: one repository found inside it (its folder, as a path under
+    /// the home folder as written), or None when none was found.
+    pub git_inside: Option<String>,
 }
 
 impl Guard {
@@ -351,41 +362,62 @@ impl Guard {
 
     /// Why `path` must never be moved to the Trash, or None when it may be.
     /// With `check_fs`, the path is checked both as written and where it really is; either one blocks.
+    /// A folder that is itself a Git repository is blocked; a folder that only holds one further down
+    /// is not (see [`Guard::assess`] for the warning).
     pub fn check(&self, path: &str) -> Option<String> {
+        self.judge(path, false).blocked
+    }
+
+    /// [`Guard::check`] plus the warning for a folder holding a Git repository further down.
+    /// The search reads the disk, so this needs `check_fs`; without it `git_inside` is always None.
+    pub fn assess(&self, path: &str) -> Verdict {
+        self.judge(path, true)
+    }
+
+    fn judge(&self, path: &str, look_inside: bool) -> Verdict {
+        let block = |why: String| Verdict { blocked: Some(why), git_inside: None };
         let Some(target) = normalize(path) else {
-            return Some("正しいパスではありません".into());
+            return block("正しいパスではありません".into());
         };
         let Some(home) = &self.home else {
-            return Some("ホームフォルダが分からないため扱いません".into());
+            return block("ホームフォルダが分からないため扱いません".into());
         };
         if let Some(why) = self.rules.check(&target) {
-            return Some(why);
+            return block(why);
         }
-        let Some(real) = &self.real else { return None };
+        let Some(real) = &self.real else { return Verdict::default() };
         let resolved = match real_path(&target) {
             Ok(Some(r)) => r,
             // The parent folder does not exist, so neither does the item.
-            Ok(None) => return None,
-            Err(()) => return Some("実際の場所を確かめられません".into()),
+            Ok(None) => return Verdict::default(),
+            Err(()) => return block("実際の場所を確かめられません".into()),
         };
         // Compare inside the home folder as written, so that a home under /var (really /private/var)
         // is not caught by the /private rule.
         let resolved = to_home_ns(&resolved, &real.home, home);
         if let Some(why) = real.rules.check(&resolved) {
-            return Some(why);
+            return block(why);
         }
         let p = Path::new(&resolved);
-        if p.is_dir() {
-            if p.join(".git").exists() {
-                return Some("Git リポジトリ（未 push の変更が失われるおそれ）".into());
-            }
-            // A link is moved by itself, never what it points to, so only real folders are searched.
-            let real_dir = std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
-            if real_dir && !real.rebuilt(&resolved) && holds_git_repo(p, |s| real.rebuilt(s)) {
-                return Some("Git リポジトリを含むフォルダ（未 push の変更が失われるおそれ）".into());
-            }
+        if !p.is_dir() {
+            return Verdict::default();
         }
-        None
+        let repo_why = || block("Git リポジトリ（未 push の変更が失われるおそれ）".into());
+        let own = p.join(".git");
+        if own.exists() || own.symlink_metadata().is_ok() {
+            return repo_why();
+        }
+        // A link is moved by itself, never what it points to, so only real folders are searched.
+        let real_dir = std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
+        if !look_inside || !real_dir || real.rebuilt(&resolved) {
+            return Verdict::default();
+        }
+        match find_git_repo(p, |s| real.rebuilt(s)) {
+            // `.GIT` in another case on a case-sensitive volume: the folder itself is the repository.
+            Some(r) if r == p => repo_why(),
+            Some(r) => Verdict { blocked: None, git_inside: r.to_str().map(Into::into) },
+            None => Verdict::default(),
+        }
     }
 }
 
@@ -535,9 +567,10 @@ mod tests {
         assert!(check("/Users/a/.Ollama/Models/blobs").is_some());
     }
 
-    /// #32: a folder is refused when a Git repository sits a few levels below it.
+    /// #32, #80: a Git repository itself is refused; a folder with a repository a few levels below it
+    /// is allowed with a warning that names one repository found inside.
     #[test]
-    fn blocks_folders_holding_git_repos() {
+    fn blocks_git_repos_and_warns_on_their_parents() {
         use std::os::unix::fs::symlink;
         let (d, h) = real_home("gitrepo");
         let roots = mac_roots(&h);
@@ -560,16 +593,32 @@ mod tests {
         mk(".cache/pre-commit/repoX/.git");
 
         assert!(c(format!("{h}/work/repoA")).is_some(), "the repository itself");
-        assert!(c(format!("{h}/work")).is_some(), "parent of a repository");
-        assert!(c(format!("{h}/deep")).is_some(), "repository 3 levels below");
-        assert!(c(format!("{h}/deeper")).is_none(), "repository 4 levels below is past the limit");
-        assert!(c(format!("{h}/wt")).is_some(), ".git file");
-        assert!(c(format!("{h}/upper")).is_some(), ".GIT in another case");
-        assert!(c(format!("{h}/plain")).is_none(), "no repository inside");
-        assert!(c(format!("{h}/links")).is_none(), "links are not followed");
+        assert!(c(format!("{h}/wt/feature")).is_some(), "a worktree itself (.git file)");
+        assert!(c(format!("{h}/links/repo")).is_some(), "a link to a repository");
+        for parent in ["work", "deep", "wt", "upper"] {
+            assert_eq!(c(format!("{h}/{parent}")), None, "{parent}: a parent of a repository is not blocked");
+        }
+        // The warning: not blocked, with an example repository.
+        let g = Guard::new(&h, &roots, true);
+        let warn = |rel: &str| {
+            let v = g.assess(&format!("{h}/{rel}"));
+            assert_eq!(v.blocked, None, "{rel}");
+            v.git_inside
+        };
+        assert_eq!(warn("work").as_deref(), Some(format!("{h}/work/repoA").as_str()), "parent of a repository");
+        assert_eq!(warn("deep").as_deref(), Some(format!("{h}/deep/a/b/c").as_str()), "repository 3 levels below");
+        assert_eq!(warn("wt").as_deref(), Some(format!("{h}/wt/feature").as_str()), ".git file");
+        assert!(warn("upper").is_some_and(|p| p.ends_with("/upper/proj")), ".GIT in another case");
+        assert_eq!(warn("deeper"), None, "repository 4 levels below is past the limit");
+        assert_eq!(warn("plain"), None, "no repository inside");
+        assert_eq!(warn("links"), None, "links are not followed");
         symlink(d.join("work"), d.join("worklink")).unwrap();
-        assert!(c(format!("{h}/worklink")).is_none(), "an item that is a link is not searched");
-        assert!(c(format!("{h}/.cache/pre-commit")).is_none(), "caches are not searched");
+        assert_eq!(c(format!("{h}/worklink")), None, "an item that is a link is not blocked");
+        assert_eq!(warn("worklink"), None, "an item that is a link is not searched");
+        assert_eq!(warn(".cache/pre-commit"), None, "caches are not searched");
+        // The repository itself is blocked, with no warning on top.
+        let v = g.assess(&format!("{h}/work/repoA"));
+        assert!(v.blocked.is_some() && v.git_inside.is_none(), "{:?}", (v.blocked, v.git_inside));
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -578,7 +627,6 @@ mod tests {
     fn big_sibling_does_not_hide_a_repo() {
         let (d, h) = real_home("gitbig");
         let roots = mac_roots(&h);
-        let c = |p: String| cannot_remove(&p, &h, &roots, true);
         for name in ["photos", "a", "m", "z", "0"] {
             std::fs::create_dir_all(d.join(format!("stuff/{name}"))).unwrap();
             for i in 0..(GIT_SEARCH_ENTRIES / 4) {
@@ -586,7 +634,8 @@ mod tests {
             }
         }
         std::fs::create_dir_all(d.join("stuff/repo/.git")).unwrap();
-        assert!(c(format!("{h}/stuff")).is_some(), "repository next to big folders");
+        let v = Guard::new(&h, &roots, true).assess(&format!("{h}/stuff"));
+        assert_eq!(v.git_inside.as_deref(), Some(format!("{h}/stuff/repo").as_str()), "repository next to big folders");
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -600,7 +649,8 @@ mod tests {
             std::fs::write(d.join(format!("big/flat/{i}.txt")), b"").unwrap();
         }
         std::fs::create_dir_all(d.join("big/flat/x/y/.git")).unwrap();
-        assert!(cannot_remove(&format!("{h}/big"), &h, &roots, true).is_none());
+        let v = Guard::new(&h, &roots, true).assess(&format!("{h}/big"));
+        assert_eq!((v.blocked, v.git_inside), (None, None));
         let _ = std::fs::remove_dir_all(&d);
     }
 

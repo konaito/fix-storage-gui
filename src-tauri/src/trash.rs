@@ -103,6 +103,7 @@ mod tests {
     }
 
     /// #47: protected items never reach the step that moves things to the Trash.
+    /// #80: a folder that only holds a repository further down is not protected, so it does.
     #[test]
     fn protected_paths_never_reach_the_mover() {
         use std::cell::RefCell;
@@ -125,12 +126,13 @@ mod tests {
             ".ssh/config",
             "proj",
             "proj2/.env",
-            "work",
+            "work/repoA",
             "Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw",
             ".ollama/models",
         ];
         let mut paths: Vec<String> = protected.iter().map(|r| format!("{h}/{r}")).collect();
         paths.push(format!("{h}/Downloads/ok.txt"));
+        paths.push(format!("{h}/work"));
 
         let moved = RefCell::new(Vec::<String>::new());
         let out = move_to_trash_with(&paths, &h, |_, _, _| {}, |p| {
@@ -139,14 +141,15 @@ mod tests {
         });
 
         let moved = moved.into_inner();
-        assert_eq!(moved.len(), 1, "only the ordinary file may reach the mover: {moved:?}");
+        assert_eq!(moved.len(), 2, "only the ordinary file and the parent of a repository may reach the mover: {moved:?}");
         assert!(moved[0].ends_with("/Downloads/ok.txt"));
+        assert!(moved[1].ends_with("/work"));
         for (o, rel) in out.iter().zip(protected) {
             assert!(!o.ok, "{rel} was moved");
             assert!(o.error.as_deref().unwrap_or("").starts_with("保護されているため移動しません"), "{rel}: {:?}", o.error);
             assert!(d.join(rel).exists());
         }
-        assert!(out.last().unwrap().ok);
+        assert!(out[protected.len()].ok && out[protected.len() + 1].ok);
         let _ = std::fs::remove_dir_all(&d);
     }
 

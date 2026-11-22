@@ -273,6 +273,7 @@ export function ReviewStep(p: Props) {
                             {sourceJa(r.final, true)}
                           </span>
                           {r.final.reason && <div className="tiny">{r.final.reason}</div>}
+                          {r.final.warning && <div className="tiny warn">{r.final.warning}</div>}
                         </td>
                         <td className="actions">
                           <button type="button" className="link" onClick={() => void api.revealInFinder(r.path)}>

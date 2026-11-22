@@ -15,6 +15,7 @@ function item(over: Partial<ScanItem> = {}): ScanItem {
     modifiedMs: null,
     lastUsedMs: null,
     blocked: null,
+    gitInside: null,
     ...over,
   };
 }
@@ -52,6 +53,13 @@ describe("toRow / withAi / forDisplay", () => {
     expect(judged.cli).toBe(row.cli);
     expect(judged.final).toMatchObject({ verdict: "keep", source: "ai" });
     expect(withAi(judged, undefined).final.source).toBe("cli");
+  });
+  it("the Git warning survives toRow, withAi and forDisplay (#80)", () => {
+    const row = toRow(item({ path: "/Users/a/dev", name: "dev", dir: true, gitInside: "/Users/a/dev/app" }));
+    const warning = "中に Git リポジトリがあります（例: /Users/a/dev/app）";
+    expect(row.final.warning).toBe(warning);
+    expect(withAi(row, { id: "1", verdict: "safe", reason: "ok" }).final).toMatchObject({ verdict: "caution", warning });
+    expect(forDisplay(row, true).final).toMatchObject({ source: "pending", warning });
   });
   it("forDisplay holds rows back until the AI has judged them, only when required", () => {
     const row = toRow(item());

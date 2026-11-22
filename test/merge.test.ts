@@ -67,3 +67,31 @@ describe("signed-in users: no deletion verdict until the AI has judged (#12)", (
     expect(mergeVerdict({ ...cache, requireAi: false })).toMatchObject({ verdict: "safe", source: "cli" });
   });
 });
+
+describe("folders holding a Git repository further down (#80)", () => {
+  const junk = { blocked: null, category: "developer" as const, cli: { verdict: "junk" as const, reason: "cache" } };
+  const repo = "/Users/a/.config/nvim";
+  const warning = "中に Git リポジトリがあります（例: /Users/a/.config/nvim）";
+
+  it("the rules' safe becomes caution, with the warning", () => {
+    const f = mergeVerdict({ ...junk, gitInside: repo });
+    expect(f).toMatchObject({ verdict: "caution", locked: false, source: "cli", warning });
+    expect(selectable(f)).toBe(true);
+    expect(safePaths([{ path: "/Users/a/.config", size: 1, final: f }])).toEqual([]);
+  });
+  it("the AI's safe becomes caution too, and the AI's reason stays", () => {
+    const f = mergeVerdict({ ...junk, gitInside: repo, ai: ai("safe") });
+    expect(f).toMatchObject({ verdict: "caution", source: "ai", reason: "AI", warning });
+    expect(safePaths([{ path: "/Users/a/.config", size: 1, final: f }])).toEqual([]);
+  });
+  it("stricter verdicts are not loosened", () => {
+    expect(mergeVerdict({ ...junk, gitInside: repo, ai: ai("keep") })).toMatchObject({ verdict: "keep", warning });
+    expect(mergeVerdict({ ...junk, gitInside: repo, requireAi: true })).toMatchObject({ source: "pending", warning });
+    expect(mergeVerdict({ ...junk, blocked: "SSH の鍵", gitInside: repo })).toMatchObject({ locked: true, source: "hard-block" });
+    expect(mergeVerdict({ ...junk, cli: { verdict: "system", reason: "homebrew" }, gitInside: repo })).toMatchObject({ locked: true });
+  });
+  it("no repository, no warning", () => {
+    expect(mergeVerdict({ ...junk, gitInside: null }).warning).toBeUndefined();
+    expect(mergeVerdict(junk)).toMatchObject({ verdict: "safe" });
+  });
+});

@@ -22,15 +22,15 @@ export function cliLabel(item: ScanItem, now = Date.now()): Label {
 
 export function toRow(item: ScanItem, ai?: AiJudgement): Row {
   const cli = cliLabel(item);
-  return { ...item, cli, ai, final: mergeVerdict({ blocked: item.blocked, category: item.category, cli, ai }) };
+  return { ...item, cli, ai, final: mergeVerdict({ blocked: item.blocked, gitInside: item.gitInside, category: item.category, cli, ai }) };
 }
 
 export function withAi(row: Row, ai: AiJudgement | undefined): Row {
-  return { ...row, ai, final: mergeVerdict({ blocked: row.blocked, category: row.category, cli: row.cli, ai }) };
+  return { ...row, ai, final: mergeVerdict({ blocked: row.blocked, gitInside: row.gitInside, category: row.category, cli: row.cli, ai }) };
 }
 
 /** The verdict to show and act on. Signed-in users with plan usage get "pending" until the AI has judged a row (#12). */
 export function forDisplay(row: Row, requireAi: boolean): Row {
   if (!requireAi || row.ai) return row;
-  return { ...row, final: mergeVerdict({ blocked: row.blocked, category: row.category, cli: row.cli, requireAi }) };
+  return { ...row, final: mergeVerdict({ blocked: row.blocked, gitInside: row.gitInside, category: row.category, cli: row.cli, requireAi }) };
 }

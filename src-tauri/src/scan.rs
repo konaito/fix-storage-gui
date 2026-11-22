@@ -28,6 +28,9 @@ pub struct ScanItem {
     pub last_used_ms: Option<f64>,
     /// Why this item can never be moved to the Trash (hard block), if so.
     pub blocked: Option<String>,
+    /// For a folder that is not blocked: one Git repository found inside it (#80). The item may be
+    /// moved to the Trash, but the screen warns about it.
+    pub git_inside: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -310,9 +313,11 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
         .map(|((path, size, dir), last_used_ms)| {
             let modified_ms = fs::symlink_metadata(&path).ok().as_ref().and_then(mtime_ms);
             let name = path.rsplit('/').next().unwrap_or("").to_string();
+            let verdict = guard.assess(&path);
             ScanItem {
                 category: category_of(&path, &roots),
-                blocked: guard.check(&path),
+                blocked: verdict.blocked,
+                git_inside: verdict.git_inside,
                 name,
                 path,
                 size,
@@ -394,6 +399,29 @@ mod tests {
             let res = scan_folder(bad, &format!("{h}/Downloads"));
             assert!(!res.items.is_empty() && res.items.iter().all(|i| i.blocked.is_some()), "home={bad:?}");
         }
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// #80: a repository is blocked; its parent is offered with the repository as the warning's example.
+    #[test]
+    fn parents_of_repositories_carry_a_warning() {
+        let home = std::env::temp_dir().join(format!("fsg-scan-git-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join("dev/tools/app/.git")).unwrap();
+        fs::write(home.join("dev/tools/app/main.rs"), b"fn main() {}").unwrap();
+        fs::create_dir_all(home.join("dev/notes")).unwrap();
+        fs::write(home.join("dev/notes/a.txt"), b"hi").unwrap();
+        let h = home.to_string_lossy().to_string();
+        let res = scan_folder(&h, &format!("{h}/dev"));
+        let tools = res.items.iter().find(|i| i.name == "tools").unwrap();
+        assert_eq!((tools.blocked.as_deref(), tools.git_inside.clone()), (None, Some(format!("{h}/dev/tools/app"))));
+        let json = serde_json::to_value(tools).unwrap();
+        assert_eq!(json["gitInside"], format!("{h}/dev/tools/app"));
+        let notes = res.items.iter().find(|i| i.name == "notes").unwrap();
+        assert_eq!((notes.blocked.as_deref(), notes.git_inside.as_deref()), (None, None));
+        let res = scan_folder(&h, &format!("{h}/dev/tools"));
+        let app = res.items.iter().find(|i| i.name == "app").unwrap();
+        assert!(app.blocked.is_some() && app.git_inside.is_none(), "{app:?}");
         let _ = fs::remove_dir_all(&home);
     }
 }

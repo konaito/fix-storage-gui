@@ -36,6 +36,11 @@ export const AI_VERDICT_JA: Record<AiVerdict, string> = {
   keep: "消しちゃダメ",
 };
 
+/** The warning for a folder that holds a Git repository further down (#80). */
+export function gitWarning(repo: string): string {
+  return `中に Git リポジトリがあります（例: ${repo}）`;
+}
+
 /** Badge text and class for a final verdict ("未判定" while the AI has not judged it). */
 export function verdictJa(f: FinalVerdict): string {
   return f.source === "pending" ? "未判定" : AI_VERDICT_JA[f.verdict];
