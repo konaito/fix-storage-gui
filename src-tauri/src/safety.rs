@@ -74,7 +74,10 @@ fn blocked_trees(home: &str) -> Vec<(String, &'static str)> {
         ("/usr".into(), "macOS が管理しています"),
         ("/bin".into(), "macOS が管理しています"),
         ("/sbin".into(), "macOS が管理しています"),
-        ("/Library/Keychains".into(), "キーチェーン（パスワードや証明書）"),
+        (
+            "/Library/Keychains".into(),
+            "キーチェーン（パスワードや証明書）",
+        ),
         (h("Library/Keychains"), "キーチェーン（パスワードや証明書）"),
         (h("Library/Accounts"), "アカウント情報"),
         (h("Library/Mail"), "メールのデータ"),
@@ -99,7 +102,11 @@ fn blocked_trees(home: &str) -> Vec<(String, &'static str)> {
 /// Names that usually hold private keys or secrets.
 pub(crate) fn secret_name(name: &str) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
-    if lower.starts_with("id_rsa") || lower.starts_with("id_ed25519") || lower.starts_with("id_ecdsa") || lower.starts_with("id_dsa") {
+    if lower.starts_with("id_rsa")
+        || lower.starts_with("id_ed25519")
+        || lower.starts_with("id_ecdsa")
+        || lower.starts_with("id_dsa")
+    {
         return Some("SSH の秘密鍵");
     }
     if lower == ".env" || lower.starts_with(".env.") {
@@ -178,7 +185,10 @@ mod tests {
         assert!(check("/").is_some());
         assert!(check("/Users/a").is_some());
         assert!(check("/Users/a/Library").is_some());
-        assert!(check("/Users/a/Library/Caches").is_some(), "roots themselves are protected");
+        assert!(
+            check("/Users/a/Library/Caches").is_some(),
+            "roots themselves are protected"
+        );
         assert!(check("/System/Library/Fonts").is_some());
         assert!(check("/Users/a/Library/Keychains/login.keychain-db").is_some());
         assert!(check("/Users/a/.ssh/id_ed25519").is_some());

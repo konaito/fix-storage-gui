@@ -61,7 +61,12 @@ pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
     }
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
     {
-        let mut f = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
         f.write_all(data)?;
         f.sync_all()?;
     }
@@ -88,7 +93,10 @@ impl Store {
             }
         }
         let id = format!("urn:uuid:{}", uuid::Uuid::new_v4().hyphenated());
-        let body = serde_json::to_vec_pretty(&HostFile { ext_agent_host_id: id.clone() }).map_err(|e| e.to_string())?;
+        let body = serde_json::to_vec_pretty(&HostFile {
+            ext_agent_host_id: id.clone(),
+        })
+        .map_err(|e| e.to_string())?;
         write_private(&path, &body).map_err(|e| format!("host ID を保存できません: {e}"))?;
         Ok(id)
     }
@@ -122,7 +130,10 @@ impl Store {
 
 #[cfg(target_os = "macos")]
 fn secret_get(_dir: &Path, client_id: &str) -> Option<String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, client_id).ok()?.get_password().ok()
+    keyring::Entry::new(KEYCHAIN_SERVICE, client_id)
+        .ok()?
+        .get_password()
+        .ok()
 }
 #[cfg(target_os = "macos")]
 fn secret_set(_dir: &Path, client_id: &str, value: &str) -> Result<(), String> {
@@ -166,7 +177,11 @@ mod tests {
         let b = s.host_id().unwrap();
         assert_eq!(a, b);
         assert!(a.starts_with("urn:uuid:") && a.len() == "urn:uuid:".len() + 36);
-        let mode = fs::metadata(dir.join("host.json")).unwrap().permissions().mode() & 0o777;
+        let mode = fs::metadata(dir.join("host.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(mode, 0o600);
         let _ = fs::remove_dir_all(&dir);
     }

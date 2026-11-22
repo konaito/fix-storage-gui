@@ -17,12 +17,19 @@ pub struct TrashOutcome {
 }
 
 fn run(file: &str, args: &[&str]) -> Result<(), String> {
-    let out = Command::new(file).args(args).output().map_err(|e| e.to_string())?;
+    let out = Command::new(file)
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
     if out.status.success() {
         Ok(())
     } else {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if err.is_empty() { format!("{file} が失敗しました ({})", out.status) } else { err })
+        Err(if err.is_empty() {
+            format!("{file} が失敗しました ({})", out.status)
+        } else {
+            err
+        })
     }
 }
 
@@ -33,7 +40,15 @@ fn move_one(path: &str) -> Result<(), String> {
         }
         return run(
             "osascript",
-            &["-e", "on run argv", "-e", "tell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)", "-e", "end run", path],
+            &[
+                "-e",
+                "on run argv",
+                "-e",
+                "tell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)",
+                "-e",
+                "end run",
+                path,
+            ],
         );
     }
     let _ = path;
@@ -42,7 +57,11 @@ fn move_one(path: &str) -> Result<(), String> {
 
 /// Re-checks the hard block list for every path right before moving it.
 /// `on_progress(done, total, current)` is called before each item.
-pub fn move_to_trash(paths: &[String], home: &str, on_progress: impl Fn(usize, usize, &str)) -> Vec<TrashOutcome> {
+pub fn move_to_trash(
+    paths: &[String],
+    home: &str,
+    on_progress: impl Fn(usize, usize, &str),
+) -> Vec<TrashOutcome> {
     let roots = mac_roots(home);
     let total = paths.len();
     paths
@@ -51,14 +70,30 @@ pub fn move_to_trash(paths: &[String], home: &str, on_progress: impl Fn(usize, u
         .map(|(i, path)| {
             on_progress(i, total, path);
             if let Some(why) = cannot_remove(path, home, &roots, true) {
-                return TrashOutcome { path: path.clone(), ok: false, error: Some(format!("保護されているため移動しません: {why}")) };
+                return TrashOutcome {
+                    path: path.clone(),
+                    ok: false,
+                    error: Some(format!("保護されているため移動しません: {why}")),
+                };
             }
             if std::fs::symlink_metadata(path).is_err() {
-                return TrashOutcome { path: path.clone(), ok: false, error: Some("見つかりません（もう移動・削除された可能性）".into()) };
+                return TrashOutcome {
+                    path: path.clone(),
+                    ok: false,
+                    error: Some("見つかりません（もう移動・削除された可能性）".into()),
+                };
             }
             match move_one(path) {
-                Ok(()) => TrashOutcome { path: path.clone(), ok: true, error: None },
-                Err(e) => TrashOutcome { path: path.clone(), ok: false, error: Some(e) },
+                Ok(()) => TrashOutcome {
+                    path: path.clone(),
+                    ok: true,
+                    error: None,
+                },
+                Err(e) => TrashOutcome {
+                    path: path.clone(),
+                    ok: false,
+                    error: Some(e),
+                },
             }
         })
         .collect()

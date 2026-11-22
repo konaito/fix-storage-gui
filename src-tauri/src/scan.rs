@@ -64,7 +64,10 @@ pub fn disk_space() -> Option<DiskSpace> {
         let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::statvfs(c.as_ptr(), &mut s) } == 0 {
             let frsize = s.f_frsize as u64;
-            return Some(DiskSpace { total: s.f_blocks as u64 * frsize, available: s.f_bavail as u64 * frsize });
+            return Some(DiskSpace {
+                total: s.f_blocks as u64 * frsize,
+                available: s.f_bavail as u64 * frsize,
+            });
         }
     }
     None
@@ -76,17 +79,34 @@ struct DuResult {
 }
 
 fn cpu_time(pid: u32) -> Option<String> {
-    let out = Command::new("ps").args(["-o", "cputime=", "-p", &pid.to_string()]).output().ok()?;
+    let out = Command::new("ps")
+        .args(["-o", "cputime=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// `du -skx` for one folder. On macOS a du that used no CPU between two checks
 /// 5 s apart is waiting on a privacy prompt: kill it and report the folder unreadable
 /// (same rule as fix-storage).
 fn du(path: &str, cancel: &AtomicBool) -> DuResult {
-    let child = Command::new("du").args(["-skx", path]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
-    let Ok(mut child) = child else { return DuResult { bytes: 0, denied: false } };
+    let child = Command::new("du")
+        .args(["-skx", path])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let Ok(mut child) = child else {
+        return DuResult {
+            bytes: 0,
+            denied: false,
+        };
+    };
     let pid = child.id();
     let watchdog = cfg!(target_os = "macos");
     let mut last_cpu: Option<String> = None;
@@ -101,7 +121,10 @@ fn du(path: &str, cancel: &AtomicBool) -> DuResult {
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
-            return DuResult { bytes: 0, denied: false };
+            return DuResult {
+                bytes: 0,
+                denied: false,
+            };
         }
         if watchdog && last_check.elapsed() >= Duration::from_secs(5) {
             last_check = Instant::now();
@@ -119,15 +142,28 @@ fn du(path: &str, cancel: &AtomicBool) -> DuResult {
     }
     let out = child.wait_with_output();
     let (stdout, stderr) = match out {
-        Ok(o) => (String::from_utf8_lossy(&o.stdout).to_string(), String::from_utf8_lossy(&o.stderr).to_string()),
+        Ok(o) => (
+            String::from_utf8_lossy(&o.stdout).to_string(),
+            String::from_utf8_lossy(&o.stderr).to_string(),
+        ),
         Err(_) => (String::new(), String::new()),
     };
-    let kb: u64 = stdout.split_whitespace().next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    DuResult { bytes: kb * 1024, denied: stalled || stderr.contains("not permitted") || stderr.contains("Permission denied") }
+    let kb: u64 = stdout
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    DuResult {
+        bytes: kb * 1024,
+        denied: stalled || stderr.contains("not permitted") || stderr.contains("Permission denied"),
+    }
 }
 
 fn mtime_ms(meta: &fs::Metadata) -> Option<f64> {
-    meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as f64)
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as f64)
 }
 
 /// Parses mdls dates like "2024-03-01 12:34:56 +0000" into ms since epoch (UTC only, which is what mdls prints).
@@ -165,8 +201,17 @@ fn last_used(paths: &[String], on_progress: &dyn Fn(Progress)) -> Vec<Option<f64
         return result;
     }
     for (chunk_i, batch) in paths.chunks(40).enumerate() {
-        on_progress(Progress { phase: "dates", current: batch[0].clone(), done: chunk_i * 40, total: paths.len() });
-        let out = Command::new("mdls").args(["-raw", "-name", "kMDItemLastUsedDate"]).args(batch).stderr(Stdio::null()).output();
+        on_progress(Progress {
+            phase: "dates",
+            current: batch[0].clone(),
+            done: chunk_i * 40,
+            total: paths.len(),
+        });
+        let out = Command::new("mdls")
+            .args(["-raw", "-name", "kMDItemLastUsedDate"])
+            .args(batch)
+            .stderr(Stdio::null())
+            .output();
         let Ok(out) = out else { continue };
         let text = String::from_utf8_lossy(&out.stdout);
         let values: Vec<&str> = text.split('\0').collect();
@@ -203,7 +248,12 @@ fn collect_units(
     let mut units = Vec::new();
     let mut queue: VecDeque<String> = start.iter().cloned().collect();
     while let Some(dir) = queue.pop_front() {
-        on_progress(Progress { phase: "listing", current: dir.clone(), done: units.len(), total: 0 });
+        on_progress(Progress {
+            phase: "listing",
+            current: dir.clone(),
+            done: units.len(),
+            total: 0,
+        });
         let entries = match fs::read_dir(&dir) {
             Ok(e) => e,
             Err(e) => {
@@ -218,11 +268,17 @@ fn collect_units(
             }
         };
         for entry in entries.flatten() {
-            let child = format!("{}/{}", dir.trim_end_matches('/'), entry.file_name().to_string_lossy());
+            let child = format!(
+                "{}/{}",
+                dir.trim_end_matches('/'),
+                entry.file_name().to_string_lossy()
+            );
             if nested_aware && root_paths.contains(&child) {
                 continue;
             }
-            let Ok(meta) = fs::symlink_metadata(&child) else { continue };
+            let Ok(meta) = fs::symlink_metadata(&child) else {
+                continue;
+            };
             if meta.is_dir() {
                 if nested_aware && holds_root(&child, roots) {
                     queue.push_back(child);
@@ -245,7 +301,11 @@ pub struct ScanOptions {
     pub limit: usize,
 }
 
-pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn(Progress) + Send + Sync + 'static) -> ScanResult {
+pub fn run_scan(
+    opts: ScanOptions,
+    cancel: Arc<AtomicBool>,
+    on_progress: impl Fn(Progress) + Send + Sync + 'static,
+) -> ScanResult {
     let on_progress = Arc::new(on_progress);
     let roots = mac_roots(&opts.home);
     let root_paths: HashSet<String> = roots.iter().map(|r| r.path.clone()).collect();
@@ -253,22 +313,48 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     let units = match &opts.folder {
         None => {
             let start: Vec<String> = roots.iter().map(|r| r.path.clone()).collect();
-            collect_units(&start, &roots, &root_paths, true, &mut denied, &*on_progress)
+            collect_units(
+                &start,
+                &roots,
+                &root_paths,
+                true,
+                &mut denied,
+                &*on_progress,
+            )
         }
-        Some(folder) => collect_units(&[folder.clone()], &roots, &root_paths, false, &mut denied, &*on_progress),
+        Some(folder) => collect_units(
+            &[folder.clone()],
+            &roots,
+            &root_paths,
+            false,
+            &mut denied,
+            &*on_progress,
+        ),
     };
 
     let total = units.len();
-    let measured: Arc<Mutex<Vec<(String, u64, bool)>>> = Arc::new(Mutex::new(Vec::with_capacity(total)));
+    let measured: Arc<Mutex<Vec<(String, u64, bool)>>> =
+        Arc::new(Mutex::new(Vec::with_capacity(total)));
     let denied_m = Arc::new(Mutex::new(denied));
     let queue = Arc::new(Mutex::new(units.into_iter().collect::<VecDeque<_>>()));
     let done = Arc::new(AtomicUsize::new(0));
-    on_progress(Progress { phase: "measuring", current: String::new(), done: 0, total });
+    on_progress(Progress {
+        phase: "measuring",
+        current: String::new(),
+        done: 0,
+        total,
+    });
     let workers = 6;
     let mut handles = Vec::new();
     for _ in 0..workers {
-        let (queue, measured, denied_m, done, cancel, on_progress) =
-            (queue.clone(), measured.clone(), denied_m.clone(), done.clone(), cancel.clone(), on_progress.clone());
+        let (queue, measured, denied_m, done, cancel, on_progress) = (
+            queue.clone(),
+            measured.clone(),
+            denied_m.clone(),
+            done.clone(),
+            cancel.clone(),
+            on_progress.clone(),
+        );
         handles.push(std::thread::spawn(move || loop {
             if cancel.load(Ordering::Relaxed) {
                 return;
@@ -278,7 +364,12 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
             match unit {
                 Unit::File(path, bytes) => measured.lock().unwrap().push((path, bytes, false)),
                 Unit::Dir(path) => {
-                    on_progress(Progress { phase: "measuring", current: path.clone(), done: done.load(Ordering::Relaxed), total });
+                    on_progress(Progress {
+                        phase: "measuring",
+                        current: path.clone(),
+                        done: done.load(Ordering::Relaxed),
+                        total,
+                    });
                     let r = du(&path, &cancel);
                     if r.denied {
                         denied_m.lock().unwrap().push(path.clone());
@@ -300,9 +391,19 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     list.truncate(opts.limit);
 
     let paths: Vec<String> = list.iter().map(|(p, _, _)| p.clone()).collect();
-    on_progress(Progress { phase: "measuring", current: String::new(), done: done.load(Ordering::Relaxed), total });
+    on_progress(Progress {
+        phase: "measuring",
+        current: String::new(),
+        done: done.load(Ordering::Relaxed),
+        total,
+    });
     let used = last_used(&paths, &*on_progress);
-    on_progress(Progress { phase: "dates", current: String::new(), done: paths.len(), total: paths.len() });
+    on_progress(Progress {
+        phase: "dates",
+        current: String::new(),
+        done: paths.len(),
+        total: paths.len(),
+    });
     let items = list
         .into_iter()
         .zip(used)
@@ -324,7 +425,12 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     let mut denied = std::mem::take(&mut *denied_m.lock().unwrap());
     denied.sort();
     denied.dedup();
-    ScanResult { items, denied, disk: disk_space(), cancelled }
+    ScanResult {
+        items,
+        denied,
+        disk: disk_space(),
+        cancelled,
+    }
 }
 
 #[cfg(test)]
@@ -333,8 +439,14 @@ mod tests {
 
     #[test]
     fn mdls_dates() {
-        assert_eq!(parse_mdls_date("1970-01-02 00:00:00 +0000"), Some(86_400_000.0));
-        assert_eq!(parse_mdls_date("2024-03-01 12:00:00 +0000"), Some(1_709_294_400_000.0));
+        assert_eq!(
+            parse_mdls_date("1970-01-02 00:00:00 +0000"),
+            Some(86_400_000.0)
+        );
+        assert_eq!(
+            parse_mdls_date("2024-03-01 12:00:00 +0000"),
+            Some(1_709_294_400_000.0)
+        );
         assert_eq!(parse_mdls_date("(null)"), None);
     }
 
@@ -348,7 +460,12 @@ mod tests {
         let seen: Arc<Mutex<Vec<&'static str>>> = Arc::default();
         let seen2 = seen.clone();
         let res = run_scan(
-            ScanOptions { home: "/nonexistent-home".into(), folder: Some(dir.to_string_lossy().into()), min_size: 0, limit: 100 },
+            ScanOptions {
+                home: "/nonexistent-home".into(),
+                folder: Some(dir.to_string_lossy().into()),
+                min_size: 0,
+                limit: 100,
+            },
             Arc::new(AtomicBool::new(false)),
             move |p| seen2.lock().unwrap().push(p.phase),
         );
