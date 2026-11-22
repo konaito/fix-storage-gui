@@ -132,11 +132,11 @@ fn reveal_in_finder(path: String) -> Result<(), String> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map_err(|e| format!("Finder を開けませんでした（{e}）"))?;
+        .map_err(|e| format!("open コマンドを起動できませんでした（{e}）"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("Finder で表示できませんでした: {p}"))
+        Err(format!("open -R が失敗しました（{p}）"))
     }
 }
 
@@ -285,5 +285,7 @@ mod tests {
     fn reveal_missing_path_fails() {
         let r = reveal_in_finder("/nonexistent/fsg-reveal-test".into());
         assert!(r.is_err(), "missing path was reported as revealed");
+        // #63: the window adds "Finder で表示できませんでした: " in front, so the Rust side returns only the reason.
+        assert!(!r.unwrap_err().starts_with("Finder で表示できませんでした"));
     }
 }

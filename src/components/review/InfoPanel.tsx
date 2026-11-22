@@ -16,6 +16,8 @@ interface Props {
   selected: boolean;
   onToggle: (path: string) => void;
   onDrill: (path: string) => void;
+  /** Shows the item in Finder; a failure is reported by the caller (#63). */
+  onReveal: (path: string) => void;
 }
 
 type PreviewState = { path: string; loading: boolean; result: PreviewResult | null; error: string | null };
@@ -60,7 +62,7 @@ function fmtDate(ms: number | null | undefined): string {
   return d ? `${d}（${agoJa(ms)}）` : "—";
 }
 
-export function InfoPanel({ row, home, selected, onToggle, onDrill }: Props) {
+export function InfoPanel({ row, home, selected, onToggle, onDrill, onReveal }: Props) {
   const [pv, cancel, retry] = usePreview(row?.path ?? null);
   const { ruleOnly } = useGate();
   if (!row) {
@@ -206,7 +208,7 @@ export function InfoPanel({ row, home, selected, onToggle, onDrill }: Props) {
       </details>
 
       <div className="info-actions">
-        <button type="button" onClick={() => void api.revealInFinder(row.path)}>
+        <button type="button" onClick={() => onReveal(row.path)}>
           Finder で表示
         </button>
         {row.dir && (

@@ -22,7 +22,7 @@ import { safePaths, summarize } from "./flow/progress";
 import { effectiveSort, type SortMode } from "./flow/order";
 import { canGo, flowReducer, initialFlow, type StepId } from "./flow/steps";
 import { api, isSiwcError, type EnvInfo, type Model, type ScanProgress, type SiwcStatus, type TrashOutcome, type TrashProgress } from "./lib/api";
-import { describeError } from "./lib/errors";
+import { describeError, revealFailedJa } from "./lib/errors";
 import { formatBytes } from "./lib/format";
 import { forDisplay, toRow, withAi, type Row } from "./lib/rows";
 import { selectable } from "./safety/merge";
@@ -426,6 +426,7 @@ export default function App() {
           aiTargets={aiTargets.length}
           onGoAi={() => go("ai")}
           onGoTrash={() => go("trash")}
+          onReveal={(path) => void api.revealInFinder(path).catch((e) => setError(revealFailedJa(e)))}
           home={env?.home ?? null}
           view={reviewView}
           onView={setReviewView}

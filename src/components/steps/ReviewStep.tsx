@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { sortRows, type SortMode } from "../../flow/order";
 import { stepNo } from "../../flow/steps";
 import { applyFilter, summarize, type Filter } from "../../flow/progress";
-import { api } from "../../lib/api";
 import { agoJa, formatBytes, isoDate } from "../../lib/format";
 import { AI_VERDICT_JA, BUCKET_JA, CATEGORY_JA, CLI_VERDICT_JA, SHARED_JA, SHARED_NOTE_JA, sourceJa, verdictClass, verdictJa, whyNotSelectable } from "../../lib/labels";
 import type { Row } from "../../lib/rows";
@@ -31,6 +30,8 @@ interface Props {
   canGoUp: boolean;
   onGoUp: () => void;
   onDrill: (path: string) => void;
+  /** Shows the item in Finder; a failure is reported by the caller (#63). */
+  onReveal: (path: string) => void;
   onRescan: () => void;
   onChangeTarget: () => void;
   aiTargets: number;
@@ -204,7 +205,7 @@ export function ReviewStep(p: Props) {
                 onToggle={p.onToggle}
                 onDrill={p.onDrill}
               />
-              <InfoPanel row={focused} home={p.home} selected={!!focused && p.selected.has(focused.path)} onToggle={p.onToggle} onDrill={p.onDrill} />
+              <InfoPanel row={focused} home={p.home} selected={!!focused && p.selected.has(focused.path)} onToggle={p.onToggle} onDrill={p.onDrill} onReveal={p.onReveal} />
             </div>
           ) : (
             <div className="table-wrap" ref={mapRef} style={mapHeight ? { maxHeight: mapHeight } : undefined}>
@@ -284,7 +285,7 @@ export function ReviewStep(p: Props) {
                           {r.final.reason && <div className="tiny">{r.final.reason}</div>}
                         </td>
                         <td className="actions">
-                          <button type="button" className="link" onClick={() => void api.revealInFinder(r.path)}>
+                          <button type="button" className="link" onClick={() => p.onReveal(r.path)}>
                             Finder
                           </button>
                           {r.dir && (
