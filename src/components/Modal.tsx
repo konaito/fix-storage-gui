@@ -3,7 +3,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 
 /**
  * Focus moves to the first control when the dialog opens, Tab stays inside it, and focus goes back to where it
- * was when it closes (#78). Esc does nothing, as before; the backdrop still closes it when `onClose` is given.
+ * was when it closes, or to the step's title if that is gone (#78). Esc does nothing, as before; the backdrop still closes it when `onClose` is given.
  */
 export function Modal({ title, children, onClose, wide }: { title: string; children: ReactNode; onClose?: () => void; wide?: boolean }) {
   const dialog = useRef<HTMLDivElement>(null);
@@ -14,8 +14,12 @@ export function Modal({ title, children, onClose, wide }: { title: string; child
       fallbackFocus: el,
       escapeDeactivates: false,
       allowOutsideClick: true,
-      // The opener may be gone by now (e.g. the step page was re-created); then leave focus to the step change.
-      setReturnFocus: (prev) => (prev instanceof HTMLElement && prev.isConnected ? prev : false),
+      // The opener may be gone (the step's bar was re-created) or there was none (<body>, e.g. the usage-limit
+      // dialog opening as AI judging ends). Then go to the current step's title instead of falling back to <body>.
+      setReturnFocus: (prev) =>
+        prev instanceof HTMLElement && prev.isConnected && prev !== document.body
+          ? prev
+          : (document.querySelector<HTMLElement>(".topbar-title") ?? false),
     });
     trap.activate();
     return () => {
