@@ -27,7 +27,7 @@ import { formatBytes } from "./lib/format";
 import { forDisplay, toRow, withAi, type Row } from "./lib/rows";
 import { selectable } from "./safety/merge";
 import { UpdateCheckButton } from "./components/UpdateBanner";
-import { setUpdateBlocked } from "./lib/updater";
+import { getUpdateState, setUpdateBlocked, updateBlocksWork, useUpdateState } from "./lib/updater";
 
 const PROVIDER: JudgeProvider = chatGptProvider;
 const BATCH = 25;
@@ -44,6 +44,13 @@ export default function App() {
   const [barSlot, setBarSlot] = useState<HTMLDivElement | null>(null);
   // アプリ内アップデートは、スキャン・AI 判定・ゴミ箱移動の最中は始めない（src/lib/updater.ts）。
   useEffect(() => setUpdateBlocked(flow.busy === "scan" ? "スキャン中" : flow.busy === "ai" ? "AI 判定中" : flow.busy === "trash" ? "ゴミ箱へ移動中" : null), [flow.busy]);
+  // 逆に、更新のダウンロードから再起動までの間は、スキャン・AI 判定・ゴミ箱移動を始めない（#22）。
+  const updateBusy = updateBlocksWork(useUpdateState().phase);
+  function blockedByUpdate(): boolean {
+    if (!updateBlocksWork(getUpdateState().phase)) return false;
+    setNotice("アップデートのダウンロードとインストールが終わるまで、スキャン・AI 判定・ゴミ箱への移動は始められません。");
+    return true;
+  }
 
   const [target, setTarget] = useState<Target>({ kind: "mac" });
   const [lastFolder, setLastFolder] = useState<string | null>(null);
@@ -178,7 +185,7 @@ export default function App() {
   }
 
   async function runScan(t: Target, pushHistory: boolean) {
-    if (flow.busy) return;
+    if (flow.busy || blockedByUpdate()) return;
     setError(null);
     setNotice(null);
     setProgress(null);
@@ -228,7 +235,7 @@ export default function App() {
 
   async function sendToAi(mask: boolean) {
     setAiDialog(false);
-    if (!env || !model || flow.busy || !planReady) return;
+    if (!env || !model || flow.busy || !planReady || blockedByUpdate()) return;
     const maskOpts = { enabled: mask, home: env.home, user: env.user };
     const indexed = aiTargets.map((r, i) => ({ id: `i${i}`, row: r }));
     const batches = chunk(indexed, BATCH);
@@ -301,11 +308,11 @@ export default function App() {
 
   // Open the send dialog by itself once the AI step is up and a model is ready.
   useEffect(() => {
-    if (autoAi && flow.step === "ai" && !flow.busy && planReady && !!model && !!env && aiTargets.length > 0) {
+    if (autoAi && flow.step === "ai" && !flow.busy && !updateBusy && planReady && !!model && !!env && aiTargets.length > 0) {
       setAutoAi(false);
       setAiDialog(true);
     }
-  }, [autoAi, flow.step, flow.busy, planReady, model, env, aiTargets.length]);
+  }, [autoAi, flow.step, flow.busy, updateBusy, planReady, model, env, aiTargets.length]);
 
   // Drop selections that new verdicts (or a rescan) no longer allow.
   useEffect(() => {
@@ -319,7 +326,7 @@ export default function App() {
   const chosen = view.filter((r) => selected.has(r.path) && selectable(r.final));
 
   async function doTrash() {
-    if (chosen.length === 0) return;
+    if (chosen.length === 0 || blockedByUpdate()) return;
     const sizeOf = new Map(chosen.map((r) => [r.path, r.size]));
     setTrashProgress(null);
     setTrashError(null);
