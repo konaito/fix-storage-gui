@@ -151,26 +151,29 @@ function RuleOnlyBar(p: {
 }) {
   return (
     <div className="rule-only-bar" role="status">
-      <div>
+      <span className="rule-only-text">
         <strong>ルール判定のみモード</strong>
-        <span className="muted small">（{p.label}）</span>
-        <div className="small">
-          このアカウントは ChatGPT プランの使用を許可していないため、AI 判定はオフです。判定は元 CLI のルールとハードブロックだけで行い、OpenAI には何も送りません。
-        </div>
+        <span className="muted">（{p.label}）</span>
+        <span
+          className="muted rule-only-desc"
+          title="このアカウントは ChatGPT プランの使用を許可していないため、AI 判定はオフです。判定は元 CLI のルールとハードブロックだけで行い、OpenAI には何も送りません。"
+        >
+          AI 判定はオフです。OpenAI には何も送りません。
+        </span>
         {p.error && (
-          <div className="small warn">
+          <span className="warn">
             {p.error} <button className="link" onClick={p.onDismissError}>閉じる</button>
-          </div>
+          </span>
         )}
-      </div>
+      </span>
       {p.signingIn ? (
-        <div className="row">
-          <span className="spinner" aria-hidden="true" />
+        <span className="row">
+          <span className="spinner tiny-spin" aria-hidden="true" />
           <span className="small">ブラウザで許可してください…</span>
-          <button onClick={p.onCancel}>中止</button>
-        </div>
+          <button className="small-btn" onClick={p.onCancel}>中止</button>
+        </span>
       ) : (
-        <button className="chatgpt-button" onClick={p.onEnable}>
+        <button className="chatgpt-button small-btn" onClick={p.onEnable}>
           ChatGPT プランの利用を有効にする
         </button>
       )}

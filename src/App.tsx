@@ -5,6 +5,7 @@ import { chatGptProvider } from "./ai/chatgpt";
 import { chunk, toPayload } from "./ai/prompt";
 import type { AiJudgement, JudgeProvider } from "./ai/provider";
 import { AccountPanel } from "./components/AccountPanel";
+import { ActionBarSlot } from "./components/ActionBar";
 import { AiSendDialog } from "./components/AiSendDialog";
 import { Modal } from "./components/Modal";
 import { Stepper } from "./components/Stepper";
@@ -36,6 +37,7 @@ export default function App() {
   const [signingIn, setSigningIn] = useState(false);
 
   const [flow, dispatch] = useReducer(flowReducer, initialFlow);
+  const [barSlot, setBarSlot] = useState<HTMLDivElement | null>(null);
 
   const [target, setTarget] = useState<Target>({ kind: "mac" });
   const [lastFolder, setLastFolder] = useState<string | null>(null);
@@ -376,7 +378,6 @@ export default function App() {
         <AiStep
           planReady={planReady}
           signedIn={signedIn}
-          onEnablePlan={gate.enablePlan}
           modelName={modelInfo?.displayName ?? null}
           modelsLoading={modelsLoading}
           destination={PROVIDER.destination}
@@ -431,19 +432,18 @@ export default function App() {
           </div>
           <div>
             <h1>Fix Storage</h1>
-            <div className="muted small">
-              重いファイルを見つけて、安全にゴミ箱へ {env && <span className="version">v{env.version}</span>}
-            </div>
+            {env && <div className="version">v{env.version}</div>}
           </div>
         </div>
+        <Stepper flow={flow} canGo={(to) => canGo(flow, to, chosen.length)} onGo={go} />
         {disk && (
           <div className="disk-chip" title={`空き ${formatBytes(disk.available)} / 全体 ${formatBytes(disk.total)}`}>
             空き <strong>{formatBytes(disk.available)}</strong>
           </div>
         )}
       </header>
-
-      <Stepper flow={flow} canGo={(to) => canGo(flow, to, chosen.length)} onGo={go} />
+      {/* Each step renders its title and actions here (StepBar), so the main action never scrolls away. */}
+      <div className="topbar-slot" ref={setBarSlot} />
 
       <div className="scroll">
       <div className={`layout ${wide ? "wide" : ""}`}>
@@ -464,9 +464,11 @@ export default function App() {
               </button>
             </div>
           )}
-          <div className="page" key={flow.step}>
-            {page}
-          </div>
+          <ActionBarSlot value={barSlot}>
+            <div className="page" key={flow.step}>
+              {page}
+            </div>
+          </ActionBarSlot>
         </main>
 
         <aside className="sidebar" hidden={wide}>

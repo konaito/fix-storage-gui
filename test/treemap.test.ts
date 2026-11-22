@@ -140,3 +140,14 @@ describe("agoJa", () => {
     expect(agoJa(now - 30 * 86400000, now)).toBe("1か月前");
   });
 });
+
+import { fitHeight, MIN_MAP_HEIGHT } from "../src/components/review/fit";
+describe("fitHeight", () => {
+  it("fills the space above the action bar, never below the minimum", () => {
+    expect(fitHeight(800, 300, 100)).toBe(400);
+    expect(fitHeight(500, 300, 100)).toBe(MIN_MAP_HEIGHT);
+    expect(MIN_MAP_HEIGHT).toBe(240);
+    expect(fitHeight(0, 0, 0)).toBe(MIN_MAP_HEIGHT);
+    expect(fitHeight(1000.7, 200.2, 90)).toBe(710);
+  });
+});

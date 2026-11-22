@@ -1,3 +1,4 @@
+import { StepBar } from "../ActionBar";
 import { formatBytes } from "../../lib/format";
 
 export type Target = { kind: "mac" } | { kind: "folder"; path: string };
@@ -27,11 +28,20 @@ export function TargetStep(p: Props) {
   const folderPath = p.target.kind === "folder" ? p.target.path : p.lastFolder;
   return (
     <section className="step-page">
-      <header className="step-head">
-        <div className="eyebrow">ステップ 1</div>
-        <h2>どこをスキャンしますか？</h2>
-        <p className="muted">大きいファイルやフォルダを、サイズの大きい順に一覧します。スキャンと計測はすべてこの Mac の中で行い、どこにも送りません。</p>
-      </header>
+      <StepBar
+        eyebrow="ステップ 1"
+        title="どこをスキャンしますか？"
+        desc="大きいファイルやフォルダをサイズ順に一覧します。スキャンはこの Mac の中だけで行い、どこにも送りません。"
+      >
+        {p.canResume && (
+          <button type="button" onClick={p.onResume}>
+            前回の一覧に戻る
+          </button>
+        )}
+        <button type="button" className="primary large" onClick={p.onStart}>
+          スキャンを開始
+        </button>
+      </StepBar>
 
       <div className="choice-grid" role="radiogroup" aria-label="スキャン対象">
         <button
@@ -90,16 +100,6 @@ export function TargetStep(p: Props) {
         </div>
       )}
 
-      <div className="step-actions">
-        {p.canResume && (
-          <button type="button" onClick={p.onResume}>
-            前回の一覧に戻る
-          </button>
-        )}
-        <button type="button" className="primary large" onClick={p.onStart}>
-          スキャンを開始
-        </button>
-      </div>
     </section>
   );
 }

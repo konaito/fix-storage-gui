@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { StepBar } from "../ActionBar";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { sortRows, type SortMode } from "../../flow/order";
 import { applyFilter, summarize, type Filter } from "../../flow/progress";
 import { api } from "../../lib/api";
@@ -8,6 +9,7 @@ import type { Row } from "../../lib/rows";
 import { selectable } from "../../safety/merge";
 import { InfoPanel } from "../review/InfoPanel";
 import { Treemap } from "../review/Treemap";
+import { useFitHeight } from "../review/fit";
 import type { Target } from "./TargetStep";
 
 export type ReviewView = "map" | "list";
@@ -48,6 +50,8 @@ export function ReviewStep(p: Props) {
   useEffect(() => {
     if (!focus || !shown.some((r) => r.path === focus)) setFocus(shown[0]?.path ?? null);
   }, [shown, focus]);
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapHeight = useFitHeight(mapRef, [p.view, p.rows.length > 0, shown.length > 0]);
   const focused = shown.find((r) => r.path === focus) ?? null;
   const chosen = p.rows.filter((r) => p.selected.has(r.path) && selectable(r.final));
   const chosenSize = chosen.reduce((s, r) => s + r.size, 0);
@@ -56,30 +60,45 @@ export function ReviewStep(p: Props) {
 
   return (
     <section className="step-page review">
-      <header className="step-head row space">
-        <div>
-          <div className="eyebrow">ステップ 3</div>
-          <h2>一覧を確認して、ゴミ箱に移すものを選ぶ</h2>
-          <div className="row small muted">
-            {p.canGoUp && (
-              <button type="button" className="link" onClick={p.onGoUp}>
-                ← 上のフォルダへ
-              </button>
-            )}
-            <span className="crumb" title={p.target.kind === "folder" ? p.target.path : undefined}>
-              <span>{p.target.kind === "mac" ? "Mac 全体" : p.target.path}</span>
-            </span>
-          </div>
-        </div>
-        <div className="row">
-          <button type="button" onClick={p.onChangeTarget}>
-            対象を変える
+      <StepBar
+        eyebrow="ステップ 3"
+        title="ゴミ箱に移すものを選ぶ"
+        desc={
+          p.aiDone
+            ? "AI の判定を反映しました。「削除していい」から順に表示しています。"
+            : "いまの判定は元 CLI のルールです。項目をクリックすると右に詳細が出ます。"
+        }
+        meta={
+          <span className="sel-summary">
+            選択中 <strong>{chosen.length}</strong> 件・約 <strong>{formatBytes(chosenSize)}</strong>
+          </span>
+        }
+      >
+        <button type="button" onClick={p.onGoAi} disabled={p.aiTargets === 0}>
+          {p.aiDone ? "AI 判定の結果" : "AI で判定する"}（{p.aiTargets} 件）
+        </button>
+        <button type="button" className="primary large" disabled={chosen.length === 0} onClick={p.onGoTrash} title={chosen.length === 0 ? "項目を選ぶと進めます" : undefined}>
+          ゴミ箱へ移動の確認へ →
+        </button>
+      </StepBar>
+
+      <div className="context-row">
+        {p.canGoUp && (
+          <button type="button" className="link" onClick={p.onGoUp}>
+            ← 上のフォルダへ
           </button>
-          <button type="button" onClick={p.onRescan}>
-            再スキャン
-          </button>
-        </div>
-      </header>
+        )}
+        <span className="crumb" title={p.target.kind === "folder" ? p.target.path : undefined}>
+          <span>{p.target.kind === "mac" ? "Mac 全体" : p.target.path}</span>
+        </span>
+        <span className="spacer" />
+        <button type="button" className="link" onClick={p.onChangeTarget}>
+          対象を変える
+        </button>
+        <button type="button" className="link" onClick={p.onRescan}>
+          再スキャン
+        </button>
+      </div>
 
       {p.partial && <div className="notice">スキャンを途中で中止したため、途中までの結果です。</div>}
 
@@ -94,17 +113,33 @@ export function ReviewStep(p: Props) {
         </div>
       ) : (
         <>
+          {p.denied.length > 0 && (
+            <details className="card warn-box denied-mini">
+              <summary>
+                読めなかったフォルダが {p.denied.length} 件あります（システム設定 → プライバシーとセキュリティ → フルディスクアクセス で許可すると計測できます）
+              </summary>
+              <ul className="small">
+                {p.denied.slice(0, 50).map((d) => (
+                  <li key={d}>{d}</li>
+                ))}
+              </ul>
+            </details>
+          )}
           <div className="stats tight">
             <button type="button" className={`stat ${filter === "all" ? "on" : ""}`} onClick={() => setFilter("all")}>
               <span className="stat-label">見つかった項目</span>
-              <span className="stat-value">{sum.all.count} 件</span>
-              <span className="stat-sub">{formatBytes(sum.all.size)}</span>
+              <span className="stat-line">
+                <span className="stat-value">{sum.all.count} 件</span>
+                <span className="stat-sub">{formatBytes(sum.all.size)}</span>
+              </span>
             </button>
             {(["safe", "caution", "keep", "locked"] as const).map((b) => (
               <button type="button" key={b} className={`stat ${b} ${filter === b ? "on" : ""}`} onClick={() => setFilter(b)}>
                 <span className="stat-label">{b === "locked" ? "保護" : AI_VERDICT_JA[b]}</span>
-                <span className="stat-value">{sum[b].count} 件</span>
-                <span className="stat-sub">{formatBytes(sum[b].size)}</span>
+                <span className="stat-line">
+                  <span className="stat-value">{sum[b].count} 件</span>
+                  <span className="stat-sub">{formatBytes(sum[b].size)}</span>
+                </span>
               </button>
             ))}
           </div>
@@ -142,14 +177,13 @@ export function ReviewStep(p: Props) {
               </button>
             </div>
           </div>
-          {!p.aiDone && <p className="muted small">いまの判定は元 CLI のルールによるものです。ステップ 4 で AI に判定してもらうこともできます（任意）。</p>}
 
           {shown.length === 0 ? (
             <div className="empty small-empty">
               <p className="muted">この絞り込みに当てはまる項目はありません。</p>
             </div>
           ) : p.view === "map" ? (
-            <div className="map-layout">
+            <div className="map-layout" ref={mapRef} style={mapHeight ? { height: mapHeight } : undefined}>
               <Treemap
                 rows={shown}
                 mode={p.sort}
@@ -249,34 +283,9 @@ export function ReviewStep(p: Props) {
             </div>
           )}
 
-          {p.denied.length > 0 && (
-            <details className="card warn-box">
-              <summary>
-                読めなかったフォルダが {p.denied.length} 件あります（システム設定 → プライバシーとセキュリティ → フルディスクアクセス で許可すると計測できます）
-              </summary>
-              <ul className="small">
-                {p.denied.slice(0, 50).map((d) => (
-                  <li key={d}>{d}</li>
-                ))}
-              </ul>
-            </details>
-          )}
         </>
       )}
 
-      <footer className="action-bar">
-        <span className="sel-summary">
-          選択中 <strong>{chosen.length}</strong> 件・約 <strong>{formatBytes(chosenSize)}</strong>
-        </span>
-        <div className="row">
-          <button type="button" onClick={p.onGoAi} disabled={p.aiTargets === 0}>
-            {p.aiDone ? "AI 判定の結果" : "4. AI で判定する"}（{p.aiTargets} 件）
-          </button>
-          <button type="button" className="primary" disabled={chosen.length === 0} onClick={p.onGoTrash}>
-            5. ゴミ箱へ移動の確認へ →
-          </button>
-        </div>
-      </footer>
     </section>
   );
 }
