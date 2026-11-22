@@ -1,3 +1,4 @@
+mod app_menu;
 mod docs;
 mod preview;
 mod roots;
@@ -203,7 +204,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // アプリ内アップデート。公開鍵とエンドポイントは tauri.conf.json の plugins.updater。
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            app_menu::install(app)?;
             let dir = app.path().app_data_dir()?.join("siwc");
             app.manage(AppState { siwc: siwc::Siwc::new(dir), scan_cancel: Mutex::new(None), preview_gen: Default::default() });
             Ok(())

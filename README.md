@@ -97,6 +97,22 @@ Apple の Developer ID 署名と公証をしていない版（ad-hoc 署名の�
 - 一度開こうとしてブロックされたあと、システム設定 → プライバシーとセキュリティ の下の方にある「このまま開く」を押す（古い macOS では Finder で右クリック →「開く」でも開けます）。
 - またはターミナルで: `xattr -dr com.apple.quarantine "/Applications/Fix Storage GUI.app"`
 
+## アプリ内アップデート
+
+v0.2.0 から、アプリ自身が新しいバージョンを見つけて、アプリの中から更新できます（[Tauri 公式の updater プラグイン](https://v2.tauri.app/plugin/updater/)）。
+
+- **確認のタイミング**: 起動して数秒後に静かに確認します（失敗しても何も表示しません）。手動では、メニューバーの「Fix Storage GUI」→「アップデートを確認…」か、画面上部の「アップデートを確認」ボタンから確認できます。ログイン画面でも動きます。
+- **見つかったとき**: 画面右下に新しいバージョンとリリースノートが出ます。「アップデートして再起動」でダウンロード（実際のバイト数で進捗表示、サイズ不明なら流れるバー）→ インストール → 再起動します。「あとで」を押すと、その起動中は自動では出しません。失敗したら理由と「再試行」が出ます。
+- **作業中は邪魔しない**: スキャン・AI 判定・ゴミ箱への移動の最中は、自動で見つけた通知を出さず、インストールも始めません。
+- **仕組み**: アプリは `https://github.com/konaito/fix-storage-gui/releases/latest/download/latest.json` を読み、Apple Silicon / Intel のどちらでも同じ universal の更新バンドル（`.app.tar.gz`）を取得します。更新バンドルは専用の鍵（minisign）で署名されており、アプリに埋め込んだ公開鍵（`src-tauri/tauri.conf.json` の `plugins.updater.pubkey`）で検証できたものだけをインストールします。中身の `.app` は従来どおり Developer ID 署名＋公証済みです。
+- **v0.1.x から**: v0.1.x にはこの機能が無いので、最初の対応版（v0.2.0）だけは `.dmg` から手動で入れ替えてください。以降はアプリ内で更新できます。
+
+### 更新バンドルの署名鍵
+
+- 秘密鍵とそのパスワードは GitHub Secrets の `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` にあり、`Release` ワークフローだけが使います（リポジトリにはコミットしていません）。原本は開発用の作業マシン（Grok Bot の box）の `/home/box/secrets/fix-storage-gui-updater/`（権限 600）に保管しています。
+- **この鍵を失くすと、既存ユーザーにアップデートを配れなくなります**（公開鍵を変えた版は手動で入れ直してもらう必要があります）。パスワードマネージャーなど別の場所にも控えておくことをおすすめします。
+- `Release` ワークフローは tauri-action の標準機能で `latest.json`（`darwin-aarch64` / `darwin-x86_64` の両方が universal バンドルを指す）を作って Release に添付し、最後に中身を検査します。`Build macOS`（PR を含む）では鍵を使わないよう、更新バンドルを作らずにビルドします。
+
 ## 開発
 
 ```bash
@@ -104,12 +120,13 @@ npm ci
 npm run typecheck && npm test      # フロントエンドの型チェックとテスト
 cargo test --manifest-path src-tauri/Cargo.toml
 npm run tauri dev                  # macOS で起動
-npx tauri build --target universal-apple-darwin --bundles app,dmg
+# ローカルビルド（更新バンドルを作らない。署名鍵なしでビルドできる）
+npx tauri build --target universal-apple-darwin --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":false}}'
 ```
 
 GitHub Actions（どちらも macos-latest）:
 - `Build macOS`: main への push ごとにテストと universal の `.app` / `.dmg` ビルドを行い、artifact として保存します（ad-hoc 署名・未公証）。
-- `Release`: `v*` タグの push で GitHub Release を作り、universal の `.dmg` を添付します（[tauri-apps/tauri-action](https://github.com/tauri-apps/tauri-action) を使用）。下の Secrets が設定されていれば Developer ID で署名して公証し、なければ ad-hoc 署名（未公証）でビルドします。
+- `Release`: `v*` タグの push で GitHub Release を作り、universal の `.dmg` と、アプリ内アップデート用の署名付き `.app.tar.gz` / `.sig` / `latest.json` を添付します（[tauri-apps/tauri-action](https://github.com/tauri-apps/tauri-action) を使用）。下の Secrets が設定されていれば Developer ID で署名して公証し、なければ ad-hoc 署名（未公証）でビルドします。
 
 ### リリースの出し方
 

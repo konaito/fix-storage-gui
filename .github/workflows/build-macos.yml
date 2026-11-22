@@ -30,7 +30,8 @@ jobs:
         env:
           # https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing
           APPLE_SIGNING_IDENTITY: '-'
-        run: npx tauri build --target universal-apple-darwin --bundles app,dmg
+        # 更新バンドルの署名鍵は Release ワークフローだけで使う。ここ（PR を含む）では更新バンドルを作らない。
+        run: npx tauri build --target universal-apple-darwin --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":false}}'
       - uses: actions/upload-artifact@v7
         with:
           name: fix-storage-gui-macos-universal-dmg
