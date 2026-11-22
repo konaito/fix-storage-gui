@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { DEFAULT_CONCURRENCY } from "../../ai/runBatches";
 import { elapsedJa, ratio, type Bucket, type VerdictSummary } from "../../flow/progress";
 import { formatBytes } from "../../lib/format";
 import { AI_VERDICT_JA } from "../../lib/labels";
@@ -7,7 +8,8 @@ import { LoadingPanel, ProgressBar } from "../Loader";
 export interface AiRun {
   done: number;
   total: number;
-  batch: number;
+  batchesInFlight: number;
+  batchesCompleted: number;
   batches: number;
   chars: number;
   startedAt: number;
@@ -112,7 +114,8 @@ export function AiStep(p: Props) {
       ) : (
         <div className="callout">
           <div>
-            対象 <strong>{p.targets} 件</strong>（保護されている項目は送りません）・{batches} 回に分けて送信・モデル <strong>{p.modelName}</strong>
+            対象 <strong>{p.targets} 件</strong>（保護されている項目は送りません）・{batches} 回に分け、最大 {DEFAULT_CONCURRENCY} 件まで同時に送信・モデル{" "}
+            <strong>{p.modelName}</strong>
           </div>
         </div>
       )}
@@ -157,12 +160,12 @@ function AiRunning({ run, destination, onStop }: { run: AiRun; destination: stri
   return (
     <section className="step-page">
       <LoadingPanel
-        title={run.stopRequested ? "このバッチが終わったら中止します…" : "AI が判定しています"}
+        title={run.stopRequested ? "送信中の分が終わったら中止します…" : "AI が判定しています"}
         footer={
           <>
             <span className="muted small">経過 {elapsedJa(now - run.startedAt)}</span>
             <button type="button" onClick={onStop} disabled={run.stopRequested}>
-              {run.stopRequested ? "中止を待っています…" : "中止（このバッチの後）"}
+              {run.stopRequested ? "中止を待っています…" : "中止（送信中の分が終わったら）"}
             </button>
           </>
         }
@@ -172,7 +175,8 @@ function AiRunning({ run, destination, onStop }: { run: AiRun; destination: stri
             判定済み <strong>{run.done}</strong> / {run.total} 件
           </span>
           <span className="muted">
-            バッチ {Math.min(run.batch, run.batches)} / {run.batches}
+            完了 {run.batchesCompleted} / {run.batches} バッチ
+            {run.batchesInFlight > 0 ? `（送信中 ${run.batchesInFlight}）` : ""}
           </span>
         </div>
         <ProgressBar value={ratio(run.done, run.total)} label="判定済みの件数" />

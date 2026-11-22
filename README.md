@@ -34,6 +34,7 @@ AI 判定は **Sign in with ChatGPT** を使い、あなたの ChatGPT プラン
 - 送る前に「この情報を OpenAI に送ります」というダイアログで、実際に送る JSON をそのまま確認できます。
 - ホームフォルダ（`/Users/あなた` → `~`）とユーザー名（→ `<user>`）を隠すオプションがあり、初期状態でオンです。
 - AI 判定のプロバイダは差し替えられる作りです（`src/ai/provider.ts` の `JudgeProvider`）。将来ローカルモデル（MLX / llama.cpp など）を追加できるようにしてあります（今はまだありません）。
+- AI 判定は 25 件ずつのバッチを、最大 3 件まで同時に送ります（公式の Sign in with ChatGPT ドキュメントには同時実行数や RPM の上限は書かれていないため、控えめな既定値です。429 / 使用量上限では待ち時間を入れて同時送信数を 1 まで下げてから失敗します）。
 
 ## Sign in with ChatGPT について
 
@@ -52,7 +53,7 @@ AI 判定には OpenAI の [Sign in with ChatGPT](https://developers.openai.com/
 - PKCE（S256）・`state`・`nonce` を毎回生成。コールバックは `http://127.0.0.1:1455/auth/callback`（使用中なら空いているポート、パスは固定）。
 - ID トークンは OpenAI の JWKS で署名を検証し、`iss`・`aud`（発行済み client_id）・`exp`・`nonce` を確認。付与スコープに `chatgpt.tokens.use.direct` があるかで、プランの利用可否を判断します。
 - トークンは **macOS のキーチェーン** に保存します（Web ビュー側には渡しません）。アカウントの非秘密情報（client_id、メールなど）だけをアプリのデータフォルダに `0600` で保存します。
-- 期限が近づいたらリフレッシュ（同時実行しないよう直列化）。サインアウト時は refresh token を失効（revocation）させてからローカルのトークンを消します。
+- 期限が近づいたらリフレッシュ（同時実行しないよう直列化。401 が重なっても、すでに更新済みのトークンは再リフレッシュしません）。サインアウト時は refresh token を失効（revocation）させてからローカルのトークンを消します。
 - モデルは `GET /v1/models` で取得して選択（`visibility: "list"` のみ、サーバーの順番のまま）。**モデル名はハードコードしていません。**
 - 推論は `POST /v1/responses` に `store: false`・`stream: true` で送り、`response.completed` を受け取ったときだけ成功とします。
 - 「ChatGPT プランを使用中」表示と「使用量を管理」ボタン、初回のみの案内ダイアログ、使用量上限（`subscription_sharing_usage_limit_exceeded`）時のダイアログ、同意拒否・プラン未許可・失効（再サインイン）などのエラー処理があります。
