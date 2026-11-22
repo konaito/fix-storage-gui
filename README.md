@@ -25,7 +25,7 @@ AI 判定は **Sign in with ChatGPT** を使い、あなたの ChatGPT プラン
 - このアプリで追加したハードブロック: `/System`・`/private`・`/usr` などのシステム領域、キーチェーン、`~/.ssh`・`~/.gnupg`・`~/.aws`・`~/.kube`・`~/.config/gh` などの認証情報、`id_rsa*`・`*.pem`・`*.key`・`*.p12`・`.env` などの鍵や秘密情報らしいファイル、`.git` とその中身、`.git` を含むリポジトリのフォルダ、ホームフォルダと `/Applications` の外側
 - AI が「消しちゃダメ」と判定したもの
 
-さらに、元 CLI で写真・ムービー・ミュージックなど個人データのカテゴリに入るものや「使用中のデータ」と判定されたものは、AI が「削除していい」と言っても「注意」に下げます。
+AI の「削除していい」がそのまま通るのは、元 CLI が「不要（再生成できる）」と判定したものだけです。元 CLI で「使っていないかも」や「使用中のデータ」と判定されたもの、写真・ムービー・ミュージックなど個人データのカテゴリに入るものは、AI が「削除していい」と言っても「注意」に下げます。
 ゴミ箱へ移す直前に、Rust 側でもう一度ハードブロックを確認します。
 
 ## プライバシー
@@ -113,7 +113,7 @@ v0.2.0 から、アプリ自身が新しいバージョンを見つけて、ア�
 
 - 秘密鍵とそのパスワードは GitHub Secrets の `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` にあり、`Release` ワークフローだけが使います（リポジトリにはコミットしていません）。原本は開発用の作業マシン（Grok Bot の box）の `/home/box/secrets/fix-storage-gui-updater/`（権限 600）に保管しています。
 - **この鍵を失くすと、既存ユーザーにアップデートを配れなくなります**（公開鍵を変えた版は手動で入れ直してもらう必要があります）。パスワードマネージャーなど別の場所にも控えておくことをおすすめします。
-- `Release` ワークフローは tauri-action の標準機能で `latest.json`（`darwin-aarch64` / `darwin-x86_64` の両方が universal バンドルを指す）を作って Release に添付し、最後に中身を検査します。`Build macOS`（PR を含む）では鍵を使わないよう、更新バンドルを作らずにビルドします。
+- `Release` ワークフローは tauri-action の標準機能で `latest.json`（`darwin-aarch64` / `darwin-x86_64` の両方が universal バンドルを指す）を作ってドラフトの Release に添付し、中身を検査してから Release を公開します。`Build macOS`（PR を含む）では鍵を使わないよう、更新バンドルを作らずにビルドします。
 
 ## 開発
 
@@ -127,17 +127,28 @@ npx tauri build --target universal-apple-darwin --bundles app,dmg --config '{"bu
 ```
 
 GitHub Actions（どちらも macos-latest）:
-- `Build macOS`: main への push ごとにテストと universal の `.app` / `.dmg` ビルドを行い、artifact として保存します（ad-hoc 署名・未公証）。
-- `Release`: `v*` タグの push で GitHub Release を作り、universal の `.dmg` と、アプリ内アップデート用の署名付き `.app.tar.gz` / `.sig` / `latest.json` を添付します（[tauri-apps/tauri-action](https://github.com/tauri-apps/tauri-action) を使用）。下の Secrets が設定されていれば Developer ID で署名して公証し、なければ ad-hoc 署名（未公証）でビルドします。
+- `Build macOS`: main への push、PR、手動実行のたびに、版番号の一致の検査、テスト、universal の `.app` / `.dmg` ビルドを行い、artifact として保存します（ad-hoc 署名・未公証）。
+- `Release`: `v*` タグの push で GitHub Release を作り、universal の `.dmg` と、アプリ内アップデート用の署名付き `.app.tar.gz` / `.sig` / `latest.json` を添付します（[tauri-apps/tauri-action](https://github.com/tauri-apps/tauri-action) を使用）。下の Secrets で Developer ID の署名と公証をします。署名と公証の Secrets が1つでも欠けていると、ビルドの前に止まります（ad-hoc 署名や署名のみの版は出しません）。
 
 ### リリースの出し方
 
-`src-tauri/tauri.conf.json`・`src-tauri/Cargo.toml`・`package.json` の `version` を上げてコミットし、同じ番号のタグを push します（タグとバージョンが違うと Release ワークフローは止まります）。
+版番号は `package.json`、`package-lock.json`（2か所）、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` に書かれています。手で直さず、`scripts/bump-version.mjs` で一度に書き換えます。版番号がファイルごとにずれていると、`Build macOS` の検査（`scripts/check-version.mjs`）で止まります。
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+VERSION=X.Y.Z                            # 新しい版番号（先頭に v を付けない）
+node scripts/bump-version.mjs "$VERSION" # 版番号を全ファイルで書き換える
+node scripts/check-version.mjs           # 全ファイルでそろったかを確かめる
+# 書き換えた版ファイルをコミットし、PR で main に入れる
 ```
+
+main に入ったら、同じ番号のタグを push します。タグと `tauri.conf.json` の版番号が違うと、Release ワークフローは止まります。
+
+```bash
+git tag "v$VERSION"
+git push origin "v$VERSION"
+```
+
+Release ワークフローは Release をドラフトで作り、`latest.json` の検査が通ってから公開します。検査やビルドで落ちたときは Release が公開されないので、利用者には配られません（ドラフトの Release が残ることがあります）。原因を直したら、同じタグのワークフローを再実行します。tauri-action は同じタグのドラフトを使い回し、同じ名前のアセットを上げ直します。
 
 ## 公証の有効化手順
 
@@ -190,7 +201,7 @@ gh secret set APPLE_API_PRIVATE_KEY -R $REPO < AuthKey_<キーID>.p8
 
 ### 5. タグを切る
 
-Secrets を登録したあと、上の「リリースの出し方」のとおりにタグを push すると、署名・公証済みの `.dmg` が Release に添付されます。証明書の 3 つだけが揃っていて API キーがない場合は、署名のみ（未公証）になります。
+Secrets を登録したあと、上の「リリースの出し方」のとおりにタグを push すると、署名・公証済みの `.dmg` が Release に添付されます。証明書の 3 つと API キーの 3 つのどれかが欠けていると、Release ワークフローはビルドの前に止まります。
 
 ## ライセンス
 

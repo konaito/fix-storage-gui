@@ -3,9 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { sortRows, type SortMode } from "../../flow/order";
 import { stepNo } from "../../flow/steps";
 import { applyFilter, summarize, type Filter } from "../../flow/progress";
-import { api } from "../../lib/api";
 import { agoJa, formatBytes, isoDate } from "../../lib/format";
-import { AI_VERDICT_JA, BUCKET_JA, CATEGORY_JA, CLI_VERDICT_JA, sourceJa, verdictClass, verdictJa, whyNotSelectable } from "../../lib/labels";
+import { AI_VERDICT_JA, BUCKET_JA, CATEGORY_JA, CLI_VERDICT_JA, SHARED_JA, SHARED_NOTE_JA, sourceJa, verdictClass, verdictJa, whyNotSelectable } from "../../lib/labels";
 import type { Row } from "../../lib/rows";
 import { selectable } from "../../safety/merge";
 import { InfoPanel } from "../review/InfoPanel";
@@ -31,6 +30,8 @@ interface Props {
   canGoUp: boolean;
   onGoUp: () => void;
   onDrill: (path: string) => void;
+  /** Shows the item in Finder; a failure is reported by the caller (#63). */
+  onReveal: (path: string) => void;
   onRescan: () => void;
   onChangeTarget: () => void;
   aiTargets: number;
@@ -58,6 +59,7 @@ export function ReviewStep(p: Props) {
   const focused = shown.find((r) => r.path === focus) ?? null;
   const chosen = p.rows.filter((r) => p.selected.has(r.path) && selectable(r.final));
   const chosenSize = chosen.reduce((s, r) => s + r.size, 0);
+  const chosenShared = chosen.filter((r) => r.shared).length;
   const shownSelectable = shown.filter((r) => selectable(r.final));
   const allShownChecked = shownSelectable.length > 0 && shownSelectable.every((r) => p.selected.has(r.path));
 
@@ -80,6 +82,7 @@ export function ReviewStep(p: Props) {
         meta={
           <span className="sel-summary">
             選択中 <strong>{chosen.length}</strong> 件・約 <strong>{formatBytes(chosenSize)}</strong>
+            {chosenShared > 0 && <span className="warn tiny block">うち {chosenShared} 件は{SHARED_NOTE_JA}</span>}
           </span>
         }
       >
@@ -202,7 +205,7 @@ export function ReviewStep(p: Props) {
                 onToggle={p.onToggle}
                 onDrill={p.onDrill}
               />
-              <InfoPanel row={focused} home={p.home} selected={!!focused && p.selected.has(focused.path)} onToggle={p.onToggle} onDrill={p.onDrill} />
+              <InfoPanel row={focused} home={p.home} selected={!!focused && p.selected.has(focused.path)} onToggle={p.onToggle} onDrill={p.onDrill} onReveal={p.onReveal} />
             </div>
           ) : (
             <div className="table-wrap" ref={mapRef} style={mapHeight ? { maxHeight: mapHeight } : undefined}>
@@ -255,7 +258,14 @@ export function ReviewStep(p: Props) {
                             {r.path}
                           </div>
                         </td>
-                        <td className="num strong">{formatBytes(r.size)}</td>
+                        <td className="num strong">
+                          {formatBytes(r.size)}
+                          {r.shared && (
+                            <div className="warn tiny" title={SHARED_NOTE_JA}>
+                              {SHARED_JA}
+                            </div>
+                          )}
+                        </td>
                         <td className="dates">
                           <div title={isoDate(r.lastUsedMs) ?? "Spotlight に記録なし"}>{agoJa(r.lastUsedMs)}</div>
                           <div className="muted tiny" title={isoDate(r.modifiedMs) ?? ""}>
@@ -275,7 +285,7 @@ export function ReviewStep(p: Props) {
                           {r.final.reason && <div className="tiny">{r.final.reason}</div>}
                         </td>
                         <td className="actions">
-                          <button type="button" className="link" onClick={() => void api.revealInFinder(r.path)}>
+                          <button type="button" className="link" onClick={() => p.onReveal(r.path)}>
                             Finder
                           </button>
                           {r.dir && (
