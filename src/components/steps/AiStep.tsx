@@ -106,7 +106,13 @@ export function AiStep(p: Props) {
                 ← 一覧に戻る
               </button>
             )}
-            {skip}
+            {p.aiFirst && p.ruleOnly ? (
+              <button type="button" onClick={p.onGoReview} disabled={!p.canGoReview}>
+                ルール判定の一覧へ
+              </button>
+            ) : (
+              skip
+            )}
             <button type="button" className="primary large" onClick={p.onOpenSend}>
               送信内容を確認する…
             </button>

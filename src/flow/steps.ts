@@ -147,7 +147,8 @@ export function flowReducer(s: FlowState, e: FlowEvent): FlowState {
     case "mode": {
       if (s.aiFirst === e.aiFirst) return s;
       if (!e.aiFirst) return { ...s, aiFirst: false };
-      const aiSettled = s.aiDone || e.aiTargets === 0;
+      // A list already opened with the rules' verdict stays open (#26).
+      const aiSettled = s.aiDone || e.aiTargets === 0 || s.ruleOnly;
       const step = s.step === "review" && s.hasScan && !aiSettled && !s.busy ? "ai" : s.step;
       return { ...s, aiFirst: true, aiSettled, step };
     }

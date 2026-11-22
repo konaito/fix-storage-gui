@@ -208,6 +208,11 @@ describe("signed-in users: AI judgement comes before the list (#12)", () => {
       const s = run([{ type: "skipAi" }, { type: "scanStart" }, { type: "scanEnd", ok: false }], scannedAi);
       expect(s).toMatchObject({ step: "review", ruleOnly: true });
     });
+    it("turning AI off and on again (account switch) keeps the list open", () => {
+      const s = run([{ type: "skipAi" }, { type: "mode", aiFirst: false, aiTargets: 4 }, { type: "mode", aiFirst: true, aiTargets: 4 }], scannedAi);
+      expect(s.ruleOnly).toBe(true);
+      expect(canGo(s, "review", 0)).toBe(true);
+    });
     it("skipping does nothing while busy or without a list", () => {
       expect(run([{ type: "skipAi" }], ai).ruleOnly).toBe(false);
       const busy = run([{ type: "aiStart" }, { type: "skipAi" }], scannedAi);
