@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, isSiwcError, type SiwcStatus } from "../lib/api";
 import { describeError } from "../lib/errors";
@@ -10,8 +10,6 @@ interface SiwcChanged {
   reason: "signed_in" | "signed_out" | "switched";
   remoteRevoked: boolean | null;
 }
-
-type Attempt = { clientId: string | null; promptConsent: boolean };
 
 /**
  * Sign in with ChatGPT is required: nothing inside `children` is rendered until the
@@ -28,7 +26,6 @@ export function LoginGate({ children }: { children: ReactNode }) {
   const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState<{ message: string; cancelled: boolean } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const lastAttempt = useRef<Attempt>({ clientId: null, promptConsent: false });
   const [statusVersion, setStatusVersion] = useState(0);
   // Per-session copy of the remembered "continue without plan usage" choices.
   const [ruleOnly, setRuleOnly] = useState<Record<string, boolean>>({});
@@ -65,7 +62,6 @@ export function LoginGate({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   async function signIn(clientId: string | null, promptConsent: boolean) {
-    lastAttempt.current = { clientId, promptConsent };
     setError(null);
     setNotice(null);
     setSigningIn(true);
@@ -98,6 +94,7 @@ export function LoginGate({ children }: { children: ReactNode }) {
     const enablePlan = () => void signIn(account.clientId, true);
     return (
       <GateContext.Provider value={{ planEnabled: view.kind === "ready", ruleOnly: view.kind !== "ready", statusVersion, enablePlan }}>
+        <div className="gate-shell">
         {view.kind === "plan_disabled" && (
           <RuleOnlyBar
             label={account.label}
@@ -109,6 +106,7 @@ export function LoginGate({ children }: { children: ReactNode }) {
           />
         )}
         {children}
+        </div>
       </GateContext.Provider>
     );
   }
@@ -121,7 +119,6 @@ export function LoginGate({ children }: { children: ReactNode }) {
       error={error}
       notice={notice}
       onSignIn={(id, consent) => void signIn(id, consent)}
-      onRetry={() => void signIn(lastAttempt.current.clientId, lastAttempt.current.promptConsent)}
       onCancelSignIn={() => void api.siwcCancelSignIn()}
       onReload={() => {
         setLoadError(null);

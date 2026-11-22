@@ -4,6 +4,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { chatGptProvider } from "./ai/chatgpt";
 import { chunk, toPayload } from "./ai/prompt";
 import type { AiJudgement, JudgeProvider } from "./ai/provider";
+import { DEFAULT_CONCURRENCY, runBatches } from "./ai/runBatches";
 import { AccountPanel } from "./components/AccountPanel";
 import { ActionBarSlot } from "./components/ActionBar";
 import { AiSendDialog } from "./components/AiSendDialog";
@@ -24,6 +25,8 @@ import { describeError } from "./lib/errors";
 import { formatBytes } from "./lib/format";
 import { toRow, withAi, type Row } from "./lib/rows";
 import { selectable } from "./safety/merge";
+import { UpdateCheckButton } from "./components/UpdateBanner";
+import { setUpdateBlocked } from "./lib/updater";
 
 const PROVIDER: JudgeProvider = chatGptProvider;
 const BATCH = 25;
@@ -38,6 +41,8 @@ export default function App() {
 
   const [flow, dispatch] = useReducer(flowReducer, initialFlow);
   const [barSlot, setBarSlot] = useState<HTMLDivElement | null>(null);
+  // アプリ内アップデートは、スキャン・AI 判定・ゴミ箱移動の最中は始めない（src/lib/updater.ts）。
+  useEffect(() => setUpdateBlocked(flow.busy === "scan" ? "スキャン中" : flow.busy === "ai" ? "AI 判定中" : flow.busy === "trash" ? "ゴミ箱へ移動中" : null), [flow.busy]);
 
   const [target, setTarget] = useState<Target>({ kind: "mac" });
   const [lastFolder, setLastFolder] = useState<string | null>(null);
@@ -215,7 +220,16 @@ export default function App() {
     const batches = chunk(indexed, BATCH);
     aiStop.current = false;
     setAiOutcome(null);
-    setAiRun({ done: 0, total: indexed.length, batch: 1, batches: batches.length, chars: 0, startedAt: Date.now(), stopRequested: false });
+    setAiRun({
+      done: 0,
+      total: indexed.length,
+      batchesInFlight: 0,
+      batchesCompleted: 0,
+      batches: batches.length,
+      chars: 0,
+      startedAt: Date.now(),
+      stopRequested: false,
+    });
     setError(null);
     dispatch({ type: "aiStart" });
     const results = new Map<string, AiJudgement>();
@@ -223,25 +237,43 @@ export default function App() {
     let stopped = false;
     let err: string | null = null;
     try {
-      for (const [bi, batch] of batches.entries()) {
-        if (aiStop.current) {
-          stopped = true;
-          break;
-        }
-        setAiRun((s) => (s ? { ...s, batch: bi + 1, chars: 0 } : s));
-        const payload = batch.map(({ id, row }) => toPayload(id, row, maskOpts));
-        const judged = await PROVIDER.judge(payload, {
-          model,
-          onProgress: (chars) => setAiRun((s) => (s ? { ...s, chars } : s)),
-        });
-        const byId = new Map(judged.map((j) => [j.id, j]));
-        for (const { id, row } of batch) {
-          const j = byId.get(id);
-          if (j) results.set(row.path, j);
-          else missing++;
-        }
-        setRows((cur) => cur.map((r) => (results.has(r.path) ? withAi(r, results.get(r.path)) : r)));
-        setAiRun((s) => (s ? { ...s, done: s.done + batch.length, chars: 0 } : s));
+      const outcome = await runBatches({
+        batches,
+        concurrency: DEFAULT_CONCURRENCY,
+        itemCount: (batch) => batch.length,
+        shouldStop: () => aiStop.current,
+        send: (batch, _index, onChars) => {
+          const payload = batch.map(({ id, row }) => toPayload(id, row, maskOpts));
+          return PROVIDER.judge(payload, { model, onProgress: onChars });
+        },
+        onBatchComplete: (_index, judged, batch) => {
+          const byId = new Map(judged.map((j) => [j.id, j]));
+          for (const { id, row } of batch) {
+            const j = byId.get(id);
+            if (j) results.set(row.path, j);
+            else missing++;
+          }
+          setRows((cur) => cur.map((r) => (results.has(r.path) ? withAi(r, results.get(r.path)) : r)));
+        },
+        onProgress: (p) => {
+          setAiRun((s) =>
+            s
+              ? {
+                  ...s,
+                  done: p.doneItems,
+                  batchesInFlight: p.batchesInFlight,
+                  batchesCompleted: p.batchesCompleted,
+                  batches: p.batchesTotal,
+                  chars: p.streamedChars,
+                }
+              : s,
+          );
+        },
+      });
+      stopped = outcome.stopped;
+      if (outcome.error) {
+        handleAiError(outcome.error);
+        err = describeError(outcome.error);
       }
     } catch (e) {
       handleAiError(e);
@@ -436,11 +468,14 @@ export default function App() {
           </div>
         </div>
         <Stepper flow={flow} canGo={(to) => canGo(flow, to, chosen.length)} onGo={go} />
+        <div className="app-bar-tools">
+          <UpdateCheckButton />
         {disk && (
           <div className="disk-chip" title={`空き ${formatBytes(disk.available)} / 全体 ${formatBytes(disk.total)}`}>
             空き <strong>{formatBytes(disk.available)}</strong>
           </div>
         )}
+        </div>
       </header>
       {/* Each step renders its title and actions here (StepBar), so the main action never scrolls away. */}
       <div className="topbar-slot" ref={setBarSlot} />

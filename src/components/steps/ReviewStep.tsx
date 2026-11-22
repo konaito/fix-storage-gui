@@ -196,7 +196,7 @@ export function ReviewStep(p: Props) {
               <InfoPanel row={focused} home={p.home} selected={!!focused && p.selected.has(focused.path)} onToggle={p.onToggle} onDrill={p.onDrill} />
             </div>
           ) : (
-            <div className="table-wrap">
+            <div className="table-wrap" ref={mapRef} style={mapHeight ? { maxHeight: mapHeight } : undefined}>
               <table>
                 <thead>
                   <tr>

@@ -1,11 +1,11 @@
 import { useLayoutEffect, useState, type RefObject } from "react";
 
 /** Minimum map height: below this the page scrolls instead of squeezing the tiles. */
-export const MIN_MAP_HEIGHT = 240;
+export const MIN_MAP_HEIGHT = 200;
 
 /**
  * Height that makes an element end right above what has to stay visible below it
- * (sticky action bar, page padding). Never below `min`.
+ * (page padding). Never below `min`.
  */
 export function fitHeight(viewport: number, top: number, reserve: number, min = MIN_MAP_HEIGHT): number {
   if (!Number.isFinite(viewport) || viewport <= 0) return min;
@@ -26,12 +26,12 @@ export function useFitHeight(ref: RefObject<HTMLElement | null>, deps: unknown[]
     const measure = () => {
       const sRect = scroller.getBoundingClientRect();
       const top = el.getBoundingClientRect().top - sRect.top + scroller.scrollTop;
-      const bar = page?.querySelector<HTMLElement>(".action-bar");
-      const barH = bar ? bar.offsetHeight + parseFloat(getComputedStyle(bar).marginTop || "0") : 0;
+      // The actions live in the top bar (outside `.scroll`), so only the page's own bottom padding stays below the map.
+      const pagePad = page ? parseFloat(getComputedStyle(page).paddingBottom || "0") : 0;
       const layout = el.closest(".layout") as HTMLElement | null;
       const padBottom = layout ? parseFloat(getComputedStyle(layout).paddingBottom || "0") : 0;
       // + 2px for the page border.
-      const next = fitHeight(scroller.clientHeight, top, barH + padBottom + 2);
+      const next = fitHeight(scroller.clientHeight, top, pagePad + padBottom + 2);
       setH((cur) => (cur === next ? cur : next));
     };
     measure();
