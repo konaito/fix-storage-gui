@@ -70,9 +70,28 @@ export interface GateModel {
   notice: string | null;
   /** Increments on every `siwc-changed` event. */
   statusVersion: number;
+  /** The wrapped app has a scan result (or a scan / AI run / trash move running) that the login screen would throw away (#75). */
+  appHasResults: boolean;
+  /** What the app is running ("AI 判定中" …), or null. Signing in again waits for it (#28). */
+  appBusy: string | null;
+  /**
+   * A token stopped working while the app held results: keep the app mounted with a bar to sign in again
+   * instead of the login screen (#75). Cleared by a sign-out, by the app dropping its results, or once ready again.
+   */
+  keepApp: "reauth" | "client_revoked" | null;
 }
 
-export const initialGate: GateModel = { status: null, loadError: null, signingIn: false, error: null, notice: null, statusVersion: 0 };
+export const initialGate: GateModel = {
+  status: null,
+  loadError: null,
+  signingIn: false,
+  error: null,
+  notice: null,
+  statusVersion: 0,
+  appHasResults: false,
+  appBusy: null,
+  keepApp: null,
+};
 
 export type GateAction =
   | { type: "loaded"; status: SiwcStatus }
@@ -82,7 +101,8 @@ export type GateAction =
   | { type: "signInEnd" }
   | { type: "error"; error: GateError | null }
   | { type: "changed"; event: SiwcChanged }
-  | { type: "dismissNotice" };
+  | { type: "dismissNotice" }
+  | { type: "app"; hasResults: boolean; busy: string | null };
 
 export const SIGNED_OUT_NOTICE = "サインアウトしました。";
 export const SIGNED_OUT_UNREVOKED_NOTICE =
@@ -91,10 +111,15 @@ export const REAUTH_NOTICE = "使用中に ChatGPT へのサインインが使�
 export const CLIENT_REVOKED_NOTICE =
   "このアプリの登録が ChatGPT 側で使えなくなったため、登録を消してログイン画面に戻りました。もう一度サインインすると新しく登録します。ほかの保存済みアカウントが選ばれているときは「別のアカウントでサインイン」から登録してください。";
 
+function lostSignInNotice(reason: "reauth" | "client_revoked"): string {
+  return reason === "reauth" ? REAUTH_NOTICE : CLIENT_REVOKED_NOTICE;
+}
+
 export function gateReducer(s: GateModel, a: GateAction): GateModel {
   switch (a.type) {
     case "loaded":
-      return { ...s, status: a.status, loadError: null };
+      // Signed in again: the bar has done its job.
+      return { ...s, status: a.status, loadError: null, keepApp: gateView(a.status, null).kind === "ready" ? null : s.keepApp };
     case "loadFailed":
       return { ...s, loadError: a.message };
     case "reload":
@@ -107,18 +132,49 @@ export function gateReducer(s: GateModel, a: GateAction): GateModel {
       return { ...s, error: a.error };
     case "dismissNotice":
       return { ...s, notice: null };
+    case "app":
+      // The app dropped its results (e.g. "最初からやり直す") while the bar was up: the login screen comes back, so say why.
+      if (!a.hasResults && s.keepApp) return { ...s, appHasResults: false, appBusy: a.busy, keepApp: null, notice: s.notice ?? lostSignInNotice(s.keepApp) };
+      return { ...s, appHasResults: a.hasResults, appBusy: a.busy };
     case "changed": {
       const next = { ...s, statusVersion: s.statusVersion + 1 };
       if (a.event.reason === "signed_out") {
-        return { ...next, error: null, notice: a.event.remoteRevoked === false ? SIGNED_OUT_UNREVOKED_NOTICE : SIGNED_OUT_NOTICE };
+        return { ...next, error: null, keepApp: null, notice: a.event.remoteRevoked === false ? SIGNED_OUT_UNREVOKED_NOTICE : SIGNED_OUT_NOTICE };
       }
-      // A token stopped working while the app was in use: say why the login screen is back,
-      // without replacing a notice that is already there (e.g. "signed out").
-      if (a.event.reason === "reauth") return { ...next, notice: s.notice ?? REAUTH_NOTICE };
-      if (a.event.reason === "client_revoked") return { ...next, notice: s.notice ?? CLIENT_REVOKED_NOTICE };
+      if (a.event.reason === "reauth" || a.event.reason === "client_revoked") {
+        // The app holds a scan result: keep it on screen with a bar to sign in again (#75).
+        if (s.appHasResults) return { ...next, keepApp: a.event.reason };
+        // Otherwise say why the login screen is back, without replacing a notice that is already there (e.g. "signed out").
+        return { ...next, notice: s.notice ?? lostSignInNotice(a.event.reason) };
+      }
       return next;
     }
   }
+}
+
+export type GateBar =
+  | { kind: "rule_only"; account: AccountView }
+  /** Signed out by a token that stopped working; `target` is the registration the sign-in button reauthorises (`null` registers anew). */
+  | { kind: "reauth"; reason: "reauth" | "client_revoked"; account: AccountView | null; target: string | null };
+
+/** What the login gate renders: the wrapped app (with an optional bar above it) or the login screen. */
+export type GateScreen = { kind: "app"; account: AccountView | null; planEnabled: boolean; bar: GateBar | null } | { kind: "login"; view: Exclude<GateView, { kind: "ready" }> };
+
+/** `continuesWithoutPlan(clientId)`: the user chose rule-only mode for that registration. */
+export function gateScreen(g: GateModel, continuesWithoutPlan: (clientId: string) => boolean): GateScreen {
+  // While the bar is up, a failed status read keeps the last known status instead of unmounting the app (#75).
+  const view = gateView(g.status, g.keepApp && g.status ? null : g.loadError);
+  if (view.kind === "ready") return { kind: "app", account: view.account, planEnabled: true, bar: null };
+  if (view.kind === "plan_disabled" && (g.keepApp || continuesWithoutPlan(view.account.clientId))) {
+    return { kind: "app", account: view.account, planEnabled: false, bar: { kind: "rule_only", account: view.account } };
+  }
+  if (view.kind === "signed_out" && g.keepApp) {
+    // reauth: reauthorise that registration. client_revoked: it is gone, so register anew rather than
+    // pointing at whatever other registration is saved (#69's account_mismatch).
+    const target = view.reauth?.clientId ?? (g.keepApp === "reauth" ? (primarySignInTarget(null, g.status?.accounts ?? [])?.clientId ?? null) : null);
+    return { kind: "app", account: null, planEnabled: false, bar: { kind: "reauth", reason: g.keepApp, account: view.reauth, target } };
+  }
+  return { kind: "login", view };
 }
 
 /**

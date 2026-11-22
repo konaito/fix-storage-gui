@@ -24,7 +24,7 @@ import { canGo, flowReducer, initialFlow, type StepId } from "./flow/steps";
 import { api, isSiwcError, type EnvInfo, type Model, type ScanProgress, type TrashOutcome, type TrashProgress } from "./lib/api";
 import { describeError } from "./lib/errors";
 import { formatBytes } from "./lib/format";
-import { forDisplay, toRow, withAi, type Row } from "./lib/rows";
+import { aiSendTargets, forDisplay, toRow, withAi, type Row } from "./lib/rows";
 import { selectable } from "./safety/merge";
 import { UpdateCheckButton } from "./components/UpdateBanner";
 import { setUpdateBlocked } from "./lib/updater";
@@ -36,15 +36,19 @@ export default function App() {
   const [env, setEnv] = useState<EnvInfo | null>(null);
   // Sign-in state is owned by the login gate (#29, #30); the app only reads it.
   const gate = useGate();
-  const { status, signingIn, refreshStatus } = gate;
+  const { status, signingIn, refreshStatus, reportApp } = gate;
   const [models, setModels] = useState<Model[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [model, setModel] = useState("");
 
   const [flow, dispatch] = useReducer(flowReducer, initialFlow);
   const [barSlot, setBarSlot] = useState<HTMLDivElement | null>(null);
+  const busyLabel = flow.busy === "scan" ? "スキャン中" : flow.busy === "ai" ? "AI 判定中" : flow.busy === "trash" ? "ゴミ箱へ移動中" : null;
   // アプリ内アップデートは、スキャン・AI 判定・ゴミ箱移動の最中は始めない（src/lib/updater.ts）。
-  useEffect(() => setUpdateBlocked(flow.busy === "scan" ? "スキャン中" : flow.busy === "ai" ? "AI 判定中" : flow.busy === "trash" ? "ゴミ箱へ移動中" : null), [flow.busy]);
+  useEffect(() => setUpdateBlocked(busyLabel), [busyLabel]);
+  // With a scan result, a token that stops working keeps this screen under a sign-in-again bar (#75).
+  useEffect(() => reportApp(flow.hasScan || !!flow.busy, busyLabel), [reportApp, flow.hasScan, flow.busy, busyLabel]);
+  useEffect(() => () => reportApp(false, null), [reportApp]);
 
   const [target, setTarget] = useState<Target>({ kind: "mac" });
   const [lastFolder, setLastFolder] = useState<string | null>(null);
@@ -90,6 +94,8 @@ export default function App() {
   const view = useMemo(() => rows.map((r) => forDisplay(r, planReady)), [rows, planReady]);
   // AI review targets: everything not locked by the hard block list or fix-storage's rules.
   const aiTargets = useMemo(() => view.filter((r) => !r.final.locked), [view]);
+  // What the next run sends (and the send dialog shows): only the rows the AI has not judged yet (#75).
+  const aiQueue = useMemo(() => aiSendTargets(aiTargets), [aiTargets]);
   useEffect(() => {
     dispatch({ type: "mode", aiFirst: planReady, aiTargets: aiTargets.length });
     if (!planReady) setAutoAi(false);
@@ -214,7 +220,7 @@ export default function App() {
     const clientId = status?.active;
     if (!env || !model || flow.busy || !planReady || !clientId) return;
     const maskOpts = { enabled: mask, home: env.home, user: env.user };
-    const indexed = aiTargets.map((r, i) => ({ id: `i${i}`, row: r }));
+    const indexed = aiQueue.map((r, i) => ({ id: `i${i}`, row: r }));
     const batches = chunk(indexed, BATCH);
     aiStop.current = false;
     setAiOutcome(null);
@@ -402,7 +408,7 @@ export default function App() {
           }}
           onRescan={() => void runScan(scanned, false)}
           onChangeTarget={() => go("target")}
-          aiTargets={aiTargets.length}
+          aiTargets={aiQueue.length}
           onGoAi={() => go("ai")}
           onGoTrash={() => go("trash")}
           home={env?.home ?? null}
@@ -424,7 +430,8 @@ export default function App() {
           modelName={modelInfo?.displayName ?? null}
           modelsLoading={modelsLoading}
           destination={PROVIDER.destination}
-          targets={aiTargets.length}
+          targets={aiQueue.length}
+          alreadyJudged={aiTargets.length - aiQueue.length}
           batchSize={BATCH}
           running={aiRun}
           outcome={aiOutcome}
@@ -554,7 +561,7 @@ export default function App() {
 
       {aiDialog && env && planReady && (
         <AiSendDialog
-          rows={aiTargets}
+          rows={aiQueue}
           provider={PROVIDER}
           model={modelInfo}
           home={env.home}

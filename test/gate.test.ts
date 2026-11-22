@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { AccountView, SiwcStatus } from "../src/lib/api";
-import { CLIENT_REVOKED_NOTICE, gateReducer, gateView, initialGate, primarySignInTarget, REAUTH_NOTICE, SIGNED_OUT_NOTICE, singleFlight, SIWC_DOCS } from "../src/lib/gate";
+import {
+  CLIENT_REVOKED_NOTICE,
+  gateReducer,
+  gateScreen,
+  gateView,
+  initialGate,
+  primarySignInTarget,
+  REAUTH_NOTICE,
+  SIGNED_OUT_NOTICE,
+  singleFlight,
+  SIWC_DOCS,
+  type GateAction,
+  type GateModel,
+} from "../src/lib/gate";
 
 const acc = (o: Partial<AccountView> = {}): AccountView => ({
   clientId: "oaiapp_1",
@@ -159,5 +172,77 @@ describe("one sign-in at a time (#30)", () => {
     });
     await expect(run()).rejects.toThrow("cancelled");
     await expect(run()).rejects.toThrow("cancelled");
+  });
+});
+
+describe("keeping scan results when a token stops working (#75)", () => {
+  const run = (actions: GateAction[], from: GateModel = initialGate) => actions.reduce(gateReducer, from);
+  const never = () => false;
+  const ready = run([{ type: "loaded", status: st([acc()]) }]);
+  const withResults = run([{ type: "app", hasResults: true, busy: null }], ready);
+  const reauthed = (from: GateModel) =>
+    run([{ type: "changed", event: { reason: "reauth", remoteRevoked: null } }, { type: "loaded", status: st([acc({ signedIn: false, needsReauth: true })]) }], from);
+  const revoked = (from: GateModel, rest: AccountView[] = []) =>
+    run([{ type: "changed", event: { reason: "client_revoked", remoteRevoked: null } }, { type: "loaded", status: st(rest, null) }], from);
+
+  it("keeps the app mounted with a sign-in-again bar after reauth when there are results", () => {
+    const s = reauthed(withResults);
+    const v = gateScreen(s, never);
+    expect(v).toMatchObject({ kind: "app", planEnabled: false, bar: { kind: "reauth", reason: "reauth", target: "oaiapp_1" } });
+    // The bar says it; the login-screen notice ("ログイン画面に戻りました") would be wrong here.
+    expect(s.notice).toBeNull();
+  });
+
+  it("keeps the app after client_revoked and signs in with a new registration, not someone else's", () => {
+    const other = acc({ clientId: "oaiapp_2", signedIn: false });
+    const v = gateScreen(revoked(withResults, [other]), never);
+    expect(v).toMatchObject({ kind: "app", bar: { kind: "reauth", reason: "client_revoked", target: null } });
+  });
+
+  it("keeps the app while a scan or AI run is still going", () => {
+    const busy = run([{ type: "app", hasResults: true, busy: "AI 判定中" }], ready);
+    const s = reauthed(busy);
+    expect(gateScreen(s, never).kind).toBe("app");
+    expect(s.appBusy).toBe("AI 判定中");
+  });
+
+  it("shows the login screen as before when there is nothing to keep", () => {
+    const s = reauthed(ready);
+    expect(gateScreen(s, never)).toMatchObject({ kind: "login", view: { kind: "signed_out" } });
+    expect(s.notice).toBe(REAUTH_NOTICE);
+    expect(gateScreen(revoked(ready), never).kind).toBe("login");
+    // Already needing reauth at launch: the app never had results.
+    const atLaunch = run([{ type: "loaded", status: st([acc({ signedIn: false, needsReauth: true })]) }]);
+    expect(gateScreen(atLaunch, never).kind).toBe("login");
+  });
+
+  it("goes to the login screen on an explicit sign-out", () => {
+    const s = run([{ type: "changed", event: { reason: "signed_out", remoteRevoked: true } }, { type: "loaded", status: st([acc({ signedIn: false })]) }], reauthed(withResults));
+    expect(gateScreen(s, never).kind).toBe("login");
+    expect(s.notice).toBe(SIGNED_OUT_NOTICE);
+  });
+
+  it("goes to the login screen, with the reauth notice, when the app drops its results", () => {
+    const s = run([{ type: "app", hasResults: false, busy: null }], reauthed(withResults));
+    expect(gateScreen(s, never).kind).toBe("login");
+    expect(s.notice).toBe(REAUTH_NOTICE);
+  });
+
+  it("drops the bar once signed in again, and a later reauth with no results goes to the login screen", () => {
+    let s = run([{ type: "loaded", status: st([acc()]) }], reauthed(withResults));
+    expect(gateScreen(s, never)).toMatchObject({ kind: "app", planEnabled: true, bar: null });
+    expect(s.keepApp).toBeNull();
+    s = reauthed(run([{ type: "app", hasResults: false, busy: null }], s));
+    expect(gateScreen(s, never).kind).toBe("login");
+  });
+
+  it("keeps the app in rule-only mode when the new sign-in did not allow plan usage", () => {
+    const s = run([{ type: "loaded", status: st([acc({ planEnabled: false })]) }], reauthed(withResults));
+    expect(gateScreen(s, never)).toMatchObject({ kind: "app", planEnabled: false, bar: { kind: "rule_only" } });
+  });
+
+  it("keeps the app when reading status fails while the bar is up", () => {
+    const s = run([{ type: "loadFailed", message: "keychain busy" }], reauthed(withResults));
+    expect(gateScreen(s, never)).toMatchObject({ kind: "app", bar: { kind: "reauth" } });
   });
 });

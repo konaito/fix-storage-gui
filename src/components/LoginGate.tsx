@@ -2,7 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } 
 import { listen } from "@tauri-apps/api/event";
 import { api, isSiwcError } from "../lib/api";
 import { describeError } from "../lib/errors";
-import { gateReducer, gateView, initialGate, ruleOnlyChoice, singleFlight, type SiwcChanged } from "../lib/gate";
+import { gateReducer, gateScreen, initialGate, ruleOnlyChoice, singleFlight, type SiwcChanged } from "../lib/gate";
 import { GateContext, type GateState, type SignInResult } from "./GateContext";
 import { LoginScreen } from "./LoginScreen";
 
@@ -15,10 +15,13 @@ import { LoginScreen } from "./LoginScreen";
  *
  * If the account did not allow ChatGPT plan usage, the user may continue in rule-only mode
  * (original CLI rules + hard block); `GateContext.planEnabled` is then false and AI is off.
+ *
+ * If a token stops working while the app holds a scan result, the app stays mounted (results and AI
+ * verdicts kept, shown with the rules only) under a bar to sign in again (#75).
  */
 export function LoginGate({ children }: { children: ReactNode }) {
   const [gate, dispatch] = useReducer(gateReducer, initialGate);
-  const { status, loadError, signingIn, error, notice, statusVersion } = gate;
+  const { status, signingIn, error, notice, statusVersion } = gate;
   // Per-session copy of the remembered "continue without plan usage" choices.
   const [ruleOnly, setRuleOnly] = useState<Record<string, boolean>>({});
 
@@ -103,18 +106,19 @@ export function LoginGate({ children }: { children: ReactNode }) {
 
   const cancelSignIn = useCallback(() => void api.siwcCancelSignIn(), []);
 
-  const view = gateView(status, loadError);
+  const reportApp = useCallback((hasResults: boolean, busy: string | null) => dispatch({ type: "app", hasResults, busy }), []);
 
-  const continuesWithoutPlan =
-    view.kind === "plan_disabled" && (ruleOnly[view.account.clientId] ?? ruleOnlyChoice.get(view.account.clientId));
+  const screen = gateScreen(gate, (clientId) => ruleOnly[clientId] ?? ruleOnlyChoice.get(clientId));
 
-  if (view.kind === "ready" || (view.kind === "plan_disabled" && continuesWithoutPlan)) {
-    const account = view.account;
-    const enablePlan = () => void signInHere(account.clientId, true);
+  if (screen.kind === "app") {
+    const { account, bar } = screen;
+    const enablePlan = () => {
+      if (account) void signInHere(account.clientId, true);
+    };
     const value: GateState = {
       status,
-      planEnabled: view.kind === "ready",
-      ruleOnly: view.kind !== "ready",
+      planEnabled: screen.planEnabled,
+      ruleOnly: bar?.kind === "rule_only",
       statusVersion,
       signingIn,
       signIn,
@@ -123,16 +127,29 @@ export function LoginGate({ children }: { children: ReactNode }) {
       switchAccount,
       refreshStatus: refresh,
       enablePlan,
+      reportApp,
     };
     return (
       <GateContext.Provider value={value}>
         <div className="gate-shell">
-        {view.kind === "plan_disabled" && (
+        {bar?.kind === "rule_only" && (
           <RuleOnlyBar
-            label={account.label}
+            label={bar.account.label}
             signingIn={signingIn}
             error={error?.message ?? null}
             onEnable={enablePlan}
+            onCancel={cancelSignIn}
+            onDismissError={() => dispatch({ type: "error", error: null })}
+          />
+        )}
+        {bar?.kind === "reauth" && (
+          <ReauthBar
+            reason={bar.reason}
+            label={bar.account?.label ?? null}
+            busy={gate.appBusy}
+            signingIn={signingIn}
+            error={error?.message ?? null}
+            onSignIn={() => void signInHere(bar.target, false)}
             onCancel={cancelSignIn}
             onDismissError={() => dispatch({ type: "error", error: null })}
           />
@@ -142,6 +159,8 @@ export function LoginGate({ children }: { children: ReactNode }) {
       </GateContext.Provider>
     );
   }
+
+  const view = screen.view;
 
   return (
     <LoginScreen
@@ -166,6 +185,47 @@ export function LoginGate({ children }: { children: ReactNode }) {
       onOpenDoc={(url) => void api.openSiwcDoc(url).catch((e) => dispatch({ type: "error", error: { message: describeError(e), cancelled: false } }))}
       onManageUsage={() => void api.openUsage()}
     />
+  );
+}
+
+/** Shown above the app when a token stopped working while it held results (#75). */
+function ReauthBar(p: {
+  reason: "reauth" | "client_revoked";
+  label: string | null;
+  busy: string | null;
+  signingIn: boolean;
+  error: string | null;
+  onSignIn: () => void;
+  onCancel: () => void;
+  onDismissError: () => void;
+}) {
+  return (
+    <div className="rule-only-bar" role="alert">
+      <span className="rule-only-text">
+        <strong>{p.reason === "reauth" ? "ChatGPT へのサインインが使えなくなりました" : "このアプリの登録が ChatGPT 側で使えなくなりました"}</strong>
+        {p.label && <span className="muted">（{p.label}）</span>}
+        <span className="muted">
+          スキャン結果と AI の判定は残しています。いまはルール判定だけで表示しています。サインインし直すと、未判定の分だけ AI 判定を続けられます。
+        </span>
+        {p.busy && <span className="muted">{p.busy}が終わるとサインインできます。</span>}
+        {p.error && (
+          <span className="warn">
+            {p.error} <button className="link" onClick={p.onDismissError}>閉じる</button>
+          </span>
+        )}
+      </span>
+      {p.signingIn ? (
+        <span className="row">
+          <span className="spinner tiny-spin" aria-hidden="true" />
+          <span className="small">ブラウザでサインインしてください…</span>
+          <button className="small-btn" onClick={p.onCancel}>中止</button>
+        </span>
+      ) : (
+        <button className="chatgpt-button small-btn" onClick={p.onSignIn} disabled={!!p.busy}>
+          {p.reason === "reauth" ? "サインインし直す" : "もう一度サインインする"}
+        </button>
+      )}
+    </div>
   );
 }
 

@@ -28,6 +28,11 @@ export interface GateState {
   refreshStatus: () => Promise<void>;
   /** Opens the browser to allow ChatGPT plan usage for the active account. */
   enablePlan: () => void;
+  /**
+   * The app tells the gate whether it holds a scan result and what it is running. With a result, a token
+   * that stops working keeps the app on screen under a sign-in-again bar instead of the login screen (#75).
+   */
+  reportApp: (hasResults: boolean, busy: string | null) => void;
 }
 
 const noop = async () => null;
@@ -44,6 +49,7 @@ export const GateContext = createContext<GateState>({
   switchAccount: noop,
   refreshStatus: async () => {},
   enablePlan: () => {},
+  reportApp: () => {},
 });
 
 export function useGate(): GateState {
