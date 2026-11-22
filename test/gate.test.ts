@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AccountView, SiwcStatus } from "../src/lib/api";
-import { gateReducer, gateView, initialGate, primarySignInTarget, REAUTH_NOTICE, SIGNED_OUT_NOTICE, singleFlight, SIWC_DOCS } from "../src/lib/gate";
+import { CLIENT_REVOKED_NOTICE, gateReducer, gateView, initialGate, primarySignInTarget, REAUTH_NOTICE, SIGNED_OUT_NOTICE, singleFlight, SIWC_DOCS } from "../src/lib/gate";
 
 const acc = (o: Partial<AccountView> = {}): AccountView => ({
   clientId: "oaiapp_1",
@@ -103,11 +103,18 @@ describe("gate state (#29, #30)", () => {
   });
 
   it("asks for a new sign-in when the registration is gone (invalid_client)", () => {
-    // Rust removes the registration and clears the active account.
-    const s = gateReducer(ready, { type: "loaded", status: st([], null) });
-    const v = gateView(s.status, s.loadError);
-    expect(v).toEqual({ kind: "signed_out", reauth: null });
+    // Rust removes the registration, clears the active account and sends "client_revoked".
+    let s = gateReducer(ready, { type: "changed", event: { reason: "client_revoked", remoteRevoked: null } });
+    expect(s.notice).toBe(CLIENT_REVOKED_NOTICE);
+    s = gateReducer(s, { type: "loaded", status: st([], null) });
+    expect(gateView(s.status, s.loadError)).toEqual({ kind: "signed_out", reauth: null });
     expect(primarySignInTarget(null, s.status?.accounts ?? [])).toBeNull();
+    // Someone else's registration is still saved: the main button points at it, so the notice
+    // (still shown) tells how to register anew.
+    const other = acc({ clientId: "oaiapp_2", signedIn: false });
+    s = gateReducer(s, { type: "loaded", status: st([other], null) });
+    expect(primarySignInTarget(null, s.status?.accounts ?? [])?.clientId).toBe("oaiapp_2");
+    expect(s.notice).toBe(CLIENT_REVOKED_NOTICE);
   });
 
   it("does not replace the sign-out notice with the reauth one", () => {

@@ -487,10 +487,15 @@ pub(crate) fn refresh_failure(kind: &str) -> RefreshFailure {
     }
 }
 
-/// Errors after which the stored sign-in state has changed, so the login gate must read it again
-/// (`siwc-changed` with reason "reauth", #29).
-pub fn changes_sign_in(kind: &str) -> bool {
-    matches!(kind, "reauth_required" | "client_revoked")
+/// `siwc-changed` reason for errors after which the stored sign-in state has changed, so the
+/// login gate must read it again (#29): "reauth" (sign in again to the same registration) or
+/// "client_revoked" (the registration was removed; a new one is needed).
+pub fn sign_in_change(kind: &str) -> Option<&'static str> {
+    match kind {
+        "reauth_required" => Some("reauth"),
+        "client_revoked" => Some("client_revoked"),
+        _ => None,
+    }
 }
 
 pub(crate) fn remove_registration(a: &mut store::AccountsFile, client_id: &str) {
@@ -677,10 +682,10 @@ mod tests {
         assert_eq!(refresh_failure("invalid_client"), RefreshFailure::Forget);
         assert_eq!(refresh_failure("network"), RefreshFailure::Keep);
         assert_eq!(refresh_failure("token_failed"), RefreshFailure::Keep);
-        assert!(changes_sign_in("reauth_required"));
-        assert!(changes_sign_in("client_revoked"));
-        assert!(!changes_sign_in("network"));
-        assert!(!changes_sign_in("usage_limit"));
+        assert_eq!(sign_in_change("reauth_required"), Some("reauth"));
+        assert_eq!(sign_in_change("client_revoked"), Some("client_revoked"));
+        assert_eq!(sign_in_change("network"), None);
+        assert_eq!(sign_in_change("usage_limit"), None);
     }
 
     #[test]

@@ -45,7 +45,7 @@ export function primarySignInTarget(reauth: AccountView | null, saved: AccountVi
 }
 
 /** Why the Rust side says the stored sign-in may have changed (`siwc-changed`). */
-export type SiwcChangeReason = "signed_in" | "signed_out" | "switched" | "reauth";
+export type SiwcChangeReason = "signed_in" | "signed_out" | "switched" | "reauth" | "client_revoked";
 
 export interface SiwcChanged {
   reason: SiwcChangeReason;
@@ -88,6 +88,8 @@ export const SIGNED_OUT_NOTICE = "サインアウトしました。";
 export const SIGNED_OUT_UNREVOKED_NOTICE =
   "サインアウトしました。この Mac のトークンは消しましたが、ChatGPT 側での接続解除を確認できませんでした。必要なら ChatGPT の設定からこのアプリの接続を解除してください。";
 export const REAUTH_NOTICE = "使用中に ChatGPT へのサインインが使えなくなったため、ログイン画面に戻りました。";
+export const CLIENT_REVOKED_NOTICE =
+  "このアプリの登録が ChatGPT 側で使えなくなったため、登録を消してログイン画面に戻りました。もう一度サインインすると新しく登録します。ほかの保存済みアカウントが選ばれているときは「別のアカウントでサインイン」から登録してください。";
 
 export function gateReducer(s: GateModel, a: GateAction): GateModel {
   switch (a.type) {
@@ -113,6 +115,7 @@ export function gateReducer(s: GateModel, a: GateAction): GateModel {
       // A token stopped working while the app was in use: say why the login screen is back,
       // without replacing a notice that is already there (e.g. "signed out").
       if (a.event.reason === "reauth") return { ...next, notice: s.notice ?? REAUTH_NOTICE };
+      if (a.event.reason === "client_revoked") return { ...next, notice: s.notice ?? CLIENT_REVOKED_NOTICE };
       return next;
     }
   }

@@ -190,8 +190,8 @@ async fn siwc_models(app: tauri::AppHandle, state: State<'_, AppState>) -> Resul
 /// state; the login gate reads it again instead of staying "ready" (#29).
 fn notify_if_signed_out<T>(app: &tauri::AppHandle, res: &Result<T, SiwcError>) {
     if let Err(e) = res {
-        if siwc::changes_sign_in(&e.kind) {
-            notify_siwc_changed(app, "reauth", None);
+        if let Some(reason) = siwc::sign_in_change(&e.kind) {
+            notify_siwc_changed(app, reason, None);
         }
     }
 }
