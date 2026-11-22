@@ -28,6 +28,25 @@ export interface ScanProgress {
   total: number;
 }
 
+/** Local-only preview for the detail panel (src-tauri/src/preview.rs). Never sent to the AI. */
+export type Preview =
+  | { kind: "blocked"; reason: string }
+  | { kind: "image"; dataUrl: string }
+  | { kind: "text"; snippet: string; truncated: boolean }
+  | { kind: "folder"; count: number; more: boolean }
+  | { kind: "none" }
+  | { kind: "missing" }
+  | { kind: "cancelled" };
+
+export interface PreviewResult {
+  path: string;
+  preview: Preview;
+  createdMs: number | null;
+  modifiedMs: number | null;
+  onDisk: number | null;
+  apparent: number | null;
+}
+
 export interface TrashProgress {
   done: number;
   total: number;
@@ -86,6 +105,8 @@ export const api = {
   envInfo: () => invoke<EnvInfo>("env_info"),
   scan: (folder: string | null, minSize: number) => invoke<ScanResult>("scan", { folder, minSize }),
   cancelScan: () => invoke<void>("cancel_scan"),
+  previewItem: (path: string) => invoke<PreviewResult>("preview_item", { path }),
+  cancelPreview: () => invoke<void>("cancel_preview"),
   moveToTrash: (paths: string[]) => invoke<TrashOutcome[]>("move_to_trash", { paths }),
   revealInFinder: (path: string) => invoke<void>("reveal_in_finder", { path }),
   openUsage: () => invoke<void>("open_usage"),
