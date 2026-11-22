@@ -345,3 +345,34 @@ details summary { cursor: pointer; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @media (max-width: 820px) { .login-grid { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .login-loading { animation: none; } }
+
+/* ---------- アプリ内アップデート（src/components/UpdateBanner.tsx） ---------- */
+.app-bar .update-chip { margin-left: auto; }
+.update-chip {
+  font-size: 12px; padding: 4px 12px; border-radius: 999px;
+  background: var(--bg-sunken); border-color: transparent; color: var(--text-2); box-shadow: none;
+}
+.update-chip.has-update { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
+.update-banner {
+  position: fixed; right: 20px; bottom: 20px; z-index: 50;
+  width: min(380px, calc(100vw - 40px));
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px 16px; border-radius: var(--radius);
+  background: var(--bg-elev); border: 1px solid var(--line-strong); box-shadow: var(--shadow-lg);
+  animation: update-in 0.18s ease-out;
+}
+.update-banner.is-error { border-color: var(--danger); }
+.update-title { font-size: 14px; }
+.update-row { display: flex; align-items: center; gap: 8px; }
+.update-ok { color: var(--ok); font-weight: 700; }
+.update-notes {
+  max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 12px; line-height: 1.5; color: var(--text-2);
+  padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg-sunken);
+}
+.update-busy { margin: 0; color: var(--warn); }
+.update-error-msg { margin: 0; color: var(--text-2); }
+.update-bytes { font-variant-numeric: tabular-nums; }
+.update-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+@keyframes update-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .update-banner { animation: none; } }

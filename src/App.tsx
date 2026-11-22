@@ -21,6 +21,8 @@ import { describeError } from "./lib/errors";
 import { formatBytes } from "./lib/format";
 import { toRow, withAi, type Row } from "./lib/rows";
 import { selectable } from "./safety/merge";
+import { UpdateCheckButton } from "./components/UpdateBanner";
+import { setUpdateBlocked } from "./lib/updater";
 
 const PROVIDER: JudgeProvider = chatGptProvider;
 const BATCH = 25;
@@ -34,6 +36,8 @@ export default function App() {
   const [signingIn, setSigningIn] = useState(false);
 
   const [flow, dispatch] = useReducer(flowReducer, initialFlow);
+  // アプリ内アップデートは、スキャン・AI 判定・ゴミ箱移動の最中は始めない（src/lib/updater.ts）。
+  useEffect(() => setUpdateBlocked(flow.busy === "scan" ? "スキャン中" : flow.busy === "ai" ? "AI 判定中" : flow.busy === "trash" ? "ゴミ箱へ移動中" : null), [flow.busy]);
 
   const [target, setTarget] = useState<Target>({ kind: "mac" });
   const [lastFolder, setLastFolder] = useState<string | null>(null);
@@ -416,6 +420,7 @@ export default function App() {
             </div>
           </div>
         </div>
+        <UpdateCheckButton />
         {disk && (
           <div className="disk-chip" title={`空き ${formatBytes(disk.available)} / 全体 ${formatBytes(disk.total)}`}>
             空き <strong>{formatBytes(disk.available)}</strong>

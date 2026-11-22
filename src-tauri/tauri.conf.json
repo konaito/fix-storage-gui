@@ -26,6 +26,7 @@
   "bundle": {
     "active": true,
     "targets": ["app", "dmg"],
+    "createUpdaterArtifacts": true,
     "category": "Utility",
     "copyright": "MIT License. Based on fix-storage (c) 2026 the fix-storage authors.",
     "icon": [
@@ -37,6 +38,14 @@
     ],
     "macOS": {
       "minimumSystemVersion": "12.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ5NUNGODRDRjAzNEUwQjAKUldTdzREVHdUUGhjU1hoMVBUR2pHa0ZIcDJRbWF3L2t6L1Yxa3VLbjJiNEZRTDlBK2FGRjE0TTcK",
+      "endpoints": [
+        "https://github.com/konaito/fix-storage-gui/releases/latest/download/latest.json"
+      ]
     }
   }
 }

@@ -2,7 +2,8 @@ name: Release
 
 # v* タグの push で GitHub Release を作り、universal の .dmg を添付する。
 # 署名・公証の Secrets があれば Developer ID で署名＋公証、なければ ad-hoc 署名（未公証）でビルドする。
-# 参考: https://v2.tauri.app/distribute/pipelines/github/ と https://v2.tauri.app/distribute/sign/macos/
+# あわせてアプリ内アップデート用の署名付き更新バンドル（.app.tar.gz と .sig）と latest.json を Release に載せる。
+# 参考: https://v2.tauri.app/distribute/pipelines/github/ 、https://v2.tauri.app/distribute/sign/macos/ 、https://v2.tauri.app/plugin/updater/
 on:
   push:
     tags: ['v*']
@@ -15,6 +16,7 @@ jobs:
     env:
       HAS_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' }}
       HAS_NOTARIZATION: ${{ secrets.APPLE_API_ISSUER != '' && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_PRIVATE_KEY != '' }}
+      HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -23,6 +25,14 @@ jobs:
           VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
           if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match tauri.conf.json version $VERSION"
+            exit 1
+          fi
+
+      # bundle.createUpdaterArtifacts が true なので、更新バンドルの署名鍵が無いとビルドが失敗する。先に分かりやすく止める。
+      - name: Check updater signing key
+        run: |
+          if [ "$HAS_UPDATER_KEY" != "true" ]; then
+            echo "::error::Secrets TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD がありません（README の「アプリ内アップデート」を参照）"
             exit 1
           fi
 
@@ -96,7 +106,13 @@ jobs:
 
       - name: Release notes
         id: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 変更点（PR 一覧）は GitHub の自動生成ノートから。アプリ内アップデートの画面には、この部分だけを出す
+          # （<!-- updater-notes-end --> より前。src/lib/updater.ts の extractNotes）。
+          CHANGES=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" --jq .body 2>/dev/null || true)
+          if [ -z "$CHANGES" ]; then CHANGES="（変更点の自動生成に失敗しました。コミット履歴を参照してください）"; fi
           if [ "$HAS_SIGNING" = "true" ] && [ "$HAS_NOTARIZATION" = "true" ]; then
             STATUS="この .dmg は Developer ID で署名し、Apple の公証（notarization）を通しています。"
             HOWTO="ダウンロードした .dmg を開き、Fix Storage GUI.app を「アプリケーション」へドラッグしてください。"
@@ -115,12 +131,20 @@ jobs:
           fi
           {
             echo "body<<NOTES_EOF"
+            echo "### ${GITHUB_REF_NAME} の変更点"
+            echo
+            echo "$CHANGES"
+            echo
+            echo "<!-- updater-notes-end -->"
+            echo
             echo "## Fix Storage GUI ${GITHUB_REF_NAME}（macOS universal: Apple Silicon / Intel）"
             echo
             echo "$STATUS"
             echo
             echo "### 開き方"
             echo "$HOWTO"
+            echo
+            echo "すでに v0.2.0 以降を使っている場合は、アプリ内の「アップデートを確認」から更新できます（v0.1.x からは手動で入れ替えてください）。"
             echo
             echo "AI 判定には Sign in with ChatGPT（プレビュー）を使います。対象条件やプライバシーについては README を参照してください。"
             echo "NOTES_EOF"
@@ -130,6 +154,9 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 更新バンドル（.app.tar.gz）を minisign で署名する鍵。公開鍵は tauri.conf.json の plugins.updater.pubkey。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Fix Storage GUI ${{ github.ref_name }}'
@@ -138,3 +165,25 @@ jobs:
           prerelease: false
           releaseAssetNamePattern: 'fix-storage-gui_[version]_[arch][ext]'
           args: '--target universal-apple-darwin --bundles app,dmg'
+          # universal の更新バンドルを darwin-aarch64 / darwin-x86_64 の両方に載せた latest.json を作って添付する（tauri-action 標準機能）。
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+
+      # アプリは https://github.com/<repo>/releases/latest/download/latest.json を見に来る。中身が正しいかここで確かめる。
+      - name: Verify latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" -p latest.json -D "$RUNNER_TEMP/updater" --clobber
+          node - "$RUNNER_TEMP/updater/latest.json" "${GITHUB_REF_NAME#v}" <<'JS'
+          const [file, want] = process.argv.slice(2);
+          const j = JSON.parse(require('fs').readFileSync(file, 'utf8'));
+          const fail = (m) => { console.log(`::error::latest.json: ${m}`); process.exit(1); };
+          if (String(j.version).replace(/^v/, '') !== want) fail(`version ${j.version} != ${want}`);
+          for (const k of ['darwin-aarch64', 'darwin-x86_64']) {
+            const p = j.platforms?.[k];
+            if (!p?.url || !p?.signature) fail(`${k} の url / signature がありません`);
+            console.log(`${k}: ${p.url}`);
+          }
+          console.log('latest.json OK');
+          JS
