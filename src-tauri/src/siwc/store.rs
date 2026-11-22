@@ -3,7 +3,6 @@
 //! * `host.json`      – this host's stable `ext_agent_host_id` (opaque, not a secret).
 //! * `accounts.json`  – non-secret account metadata (issued client_id, verified subject, email, flags).
 //! * Tokens           – macOS Keychain (one generic-password item per issued client_id).
-//!   On non-macOS development builds they fall back to an owner-only (0600) file.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -139,26 +138,18 @@ fn secret_delete(_dir: &Path, client_id: &str) -> Result<(), String> {
     }
 }
 
+// fix-storage-gui is macOS-only. These stubs only keep `cargo check` working on other systems.
 #[cfg(not(target_os = "macos"))]
-fn secret_path(dir: &Path, client_id: &str) -> PathBuf {
-    let safe: String = client_id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect();
-    dir.join("dev-credentials").join(format!("{safe}.json"))
+fn secret_get(_dir: &Path, _client_id: &str) -> Option<String> {
+    None
 }
 #[cfg(not(target_os = "macos"))]
-fn secret_get(dir: &Path, client_id: &str) -> Option<String> {
-    fs::read_to_string(secret_path(dir, client_id)).ok()
+fn secret_set(_dir: &Path, _client_id: &str, _value: &str) -> Result<(), String> {
+    Err("このアプリは macOS 専用です（キーチェーンが必要です）".into())
 }
 #[cfg(not(target_os = "macos"))]
-fn secret_set(dir: &Path, client_id: &str, value: &str) -> Result<(), String> {
-    write_private(&secret_path(dir, client_id), value.as_bytes()).map_err(|e| e.to_string())
-}
-#[cfg(not(target_os = "macos"))]
-fn secret_delete(dir: &Path, client_id: &str) -> Result<(), String> {
-    match fs::remove_file(secret_path(dir, client_id)) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+fn secret_delete(_dir: &Path, _client_id: &str) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(test)]

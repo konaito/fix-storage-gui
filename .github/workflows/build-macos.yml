@@ -1,33 +1,37 @@
 name: Build macOS
 
+# main への push ごとに、テストと universal の .app / .dmg ビルドを行い artifact に保存する（署名なし・ad-hoc 署名）。
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: lts/*
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
-      - uses: Swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: './src-tauri -> target'
       - run: npm ci
+      - run: npm run typecheck
       - run: npm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - name: Build universal .app and .dmg (unsigned)
+      - name: Build universal .app and .dmg (ad-hoc signed, not notarized)
+        env:
+          # https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing
+          APPLE_SIGNING_IDENTITY: '-'
         run: npx tauri build --target universal-apple-darwin --bundles app,dmg
-      - name: List bundles
-        run: ls -la src-tauri/target/universal-apple-darwin/release/bundle/dmg src-tauri/target/universal-apple-darwin/release/bundle/macos
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: fix-storage-gui-macos-universal-dmg
           path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg

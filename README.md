@@ -1,6 +1,6 @@
 # Fix Storage GUI
 
-Mac のストレージを圧迫している重いファイル・フォルダを見つけて、安全に「ゴミ箱へ移動」するための GUI アプリです（Tauri v2 / macOS 向け）。
+Mac のストレージを圧迫している重いファイル・フォルダを見つけて、安全に「ゴミ箱へ移動」するための GUI アプリです（Tauri v2）。**macOS 専用**です（Apple Silicon / Intel 両対応の universal ビルド）。Windows・Linux には対応していません。
 AI 判定は **Sign in with ChatGPT** を使い、あなたの ChatGPT プランの使用量で動きます（API キー不要）。
 
 > **派生元:** このアプリは [govijr/fix-storage](https://github.com/govijr/fix-storage)（MIT License, Copyright (c) 2026 the fix-storage authors）をもとにしています。
@@ -81,13 +81,18 @@ src-tauri/src/
 
 ## Mac で試す
 
-1. [Actions](../../actions/workflows/build-macos.yml) の最新の成功した実行から、artifact **`fix-storage-gui-macos-universal-dmg`** をダウンロードして解凍します（GitHub へのログインが必要です）。
+1. [Releases](https://github.com/konaito/fix-storage-gui/releases) の最新版から `fix-storage-gui_<バージョン>_universal.dmg` をダウンロードします（main の最新ビルドは [Actions の Build macOS](https://github.com/konaito/fix-storage-gui/actions/workflows/build-macos.yml) の artifact `fix-storage-gui-macos-universal-dmg` にもあります。こちらは GitHub へのログインが必要です）。
 2. `.dmg` を開き、`Fix Storage GUI.app` を「アプリケーション」へドラッグします。
-3. **未署名・未公証のアプリ** なので、最初は macOS にブロックされます。次のどちらかで開いてください。
-   - 一度開こうとしてブロックされたあと、システム設定 → プライバシーとセキュリティ の下の方にある「このまま開く」を押す（古い macOS では Finder で右クリック →「開く」でも開けます）。
-   - またはターミナルで: `xattr -dr com.apple.quarantine "/Applications/Fix Storage GUI.app"`
+3. 未署名・未公証版の場合は、下の「未署名・未公証アプリの開き方」で開きます。
 4. 「Mac 全体」をスキャンします。読めないフォルダがある場合は、システム設定 → プライバシーとセキュリティ → フルディスクアクセス でこのアプリを許可すると計測できます。
 5. AI 判定を使うなら「Continue with ChatGPT」でサインインし、モデルを選んで「AI で判定」を押します。
+
+### 未署名・未公証アプリの開き方
+
+Apple の Developer ID 署名と公証をしていない版（ad-hoc 署名のみ）は、最初は macOS にブロックされます。次のどちらかで開いてください。
+
+- 一度開こうとしてブロックされたあと、システム設定 → プライバシーとセキュリティ の下の方にある「このまま開く」を押す（古い macOS では Finder で右クリック →「開く」でも開けます）。
+- またはターミナルで: `xattr -dr com.apple.quarantine "/Applications/Fix Storage GUI.app"`
 
 ## 開発
 
@@ -99,9 +104,71 @@ npm run tauri dev                  # macOS で起動
 npx tauri build --target universal-apple-darwin --bundles app,dmg
 ```
 
-GitHub Actions:
-- `CI`（ubuntu）: 型チェック、Vitest、`cargo check`、`cargo test`
-- `Build macOS`（macos-latest）: universal の `.app` / `.dmg` をビルドし、artifact として保存（署名・公証なし）
+GitHub Actions（どちらも macos-latest）:
+- `Build macOS`: main への push ごとにテストと universal の `.app` / `.dmg` ビルドを行い、artifact として保存します（ad-hoc 署名・未公証）。
+- `Release`: `v*` タグの push で GitHub Release を作り、universal の `.dmg` を添付します（[tauri-apps/tauri-action](https://github.com/tauri-apps/tauri-action) を使用）。下の Secrets が設定されていれば Developer ID で署名して公証し、なければ ad-hoc 署名（未公証）でビルドします。
+
+### リリースの出し方
+
+`src-tauri/tauri.conf.json`・`src-tauri/Cargo.toml`・`package.json` の `version` を上げてコミットし、同じ番号のタグを push します（タグとバージョンが違うと Release ワークフローは止まります）。
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+## 公証の有効化手順
+
+[Tauri 公式の macOS 署名ドキュメント](https://v2.tauri.app/distribute/sign/macos/) に沿った手順です。Mac が必要です。
+
+### 1. Apple Developer Program に登録する
+
+署名と公証には有料の Apple Developer アカウント（年 99 ドル）が必要です。無料プランでは公証できません。
+
+### 2. Developer ID Application 証明書を作り、.p12 に書き出す
+
+1. Mac で証明書署名要求（CSR）ファイルを作ります（Apple の「Create a certificate signing request」の手順）。
+2. Apple Developer の Certificates, IDs & Profiles で「Create a certificate」を押し、**Developer ID Application** を選んで CSR をアップロードします。Developer ID Application 証明書を作れるのはアカウントの Account Holder だけです。
+3. できた証明書をダウンロードし、`.cer` を開いてキーチェーンに入れます（キーチェーンアクセスの「デフォルトキーチェーン」で「ログイン」が選ばれていることを確認）。
+4. キーチェーンアクセスの「ログイン」→「自分の証明書」で証明書を展開し、鍵の項目を右クリック →「書き出す」で `.p12` を保存します。このときパスワードを決めます。
+5. `.p12` を base64 にします:
+
+   ```bash
+   openssl base64 -A -in /path/to/certificate.p12 -out certificate-base64.txt
+   ```
+
+### 3. App Store Connect API キーを発行する
+
+1. App Store Connect の Users and Access ページで Integrations タブを開き、Add を押して、名前を付けて **Developer** アクセスを選びます。
+2. キー一覧の上に表示される **Issuer ID** と、一覧の **キー ID** を控えます。
+3. 秘密鍵（`AuthKey_<キーID>.p8`）をダウンロードします。ダウンロードできるのは 1 回だけで、ボタンはページを再読み込みしたあとに表示されます。
+
+### 4. GitHub Secrets を登録する（konaito の Mac で）
+
+```bash
+REPO=konaito/fix-storage-gui
+gh secret set APPLE_CERTIFICATE -R $REPO < certificate-base64.txt
+gh secret set APPLE_CERTIFICATE_PASSWORD -R $REPO          # .p12 のパスワードを入力
+gh secret set KEYCHAIN_PASSWORD -R $REPO --body "$(openssl rand -base64 24)"
+gh secret set APPLE_API_ISSUER -R $REPO --body "<Issuer ID>"
+gh secret set APPLE_API_KEY -R $REPO --body "<キー ID>"
+gh secret set APPLE_API_PRIVATE_KEY -R $REPO < AuthKey_<キーID>.p8
+```
+
+| Secret | 入れるもの |
+| --- | --- |
+| `APPLE_CERTIFICATE` | Developer ID Application 証明書の `.p12` を base64 にした文字列 |
+| `APPLE_CERTIFICATE_PASSWORD` | `.p12` を書き出したときに決めたパスワード |
+| `KEYCHAIN_PASSWORD` | CI 上で一時的に作るキーチェーンのパスワード（任意の文字列） |
+| `APPLE_API_ISSUER` | App Store Connect API の Issuer ID |
+| `APPLE_API_KEY` | App Store Connect API のキー ID |
+| `APPLE_API_PRIVATE_KEY` | ダウンロードした `AuthKey_<キーID>.p8` の中身 |
+
+`APPLE_CERTIFICATE`・`APPLE_CERTIFICATE_PASSWORD`・`KEYCHAIN_PASSWORD`・`APPLE_API_ISSUER`・`APPLE_API_KEY` は Tauri 公式と同じ名前です。Tauri 公式の `APPLE_API_KEY_PATH` は「秘密鍵ファイルのパス」なので、このリポジトリでは鍵の中身を `APPLE_API_PRIVATE_KEY` という Secret で渡し、ワークフローがファイルに書き出して `APPLE_API_KEY_PATH` に設定します。署名に使う `APPLE_SIGNING_IDENTITY` は、取り込んだ証明書からワークフローが自動で設定します。
+
+### 5. タグを切る
+
+Secrets を登録したあと、上の「リリースの出し方」のとおりにタグを push すると、署名・公証済みの `.dmg` が Release に添付されます。証明書の 3 つだけが揃っていて API キーがない場合は、署名のみ（未公証）になります。
 
 ## ライセンス
 

@@ -36,8 +36,8 @@ fn move_one(path: &str) -> Result<(), String> {
             &["-e", "on run argv", "-e", "tell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)", "-e", "end run", path],
         );
     }
-    // Development fallback on Linux desktops.
-    run("gio", &["trash", path])
+    let _ = path;
+    Err("このアプリは macOS 専用です".into())
 }
 
 /// Re-checks the hard block list for every path right before moving it.

@@ -1,0 +1,140 @@
+name: Release
+
+# v* タグの push で GitHub Release を作り、universal の .dmg を添付する。
+# 署名・公証の Secrets があれば Developer ID で署名＋公証、なければ ad-hoc 署名（未公証）でビルドする。
+# 参考: https://v2.tauri.app/distribute/pipelines/github/ と https://v2.tauri.app/distribute/sign/macos/
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    runs-on: macos-latest
+    env:
+      HAS_SIGNING: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.KEYCHAIN_PASSWORD != '' }}
+      HAS_NOTARIZATION: ${{ secrets.APPLE_API_ISSUER != '' && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check tag matches app version
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match tauri.conf.json version $VERSION"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # ---- 署名（Secrets があるときだけ。手順は Tauri 公式の GitHub Actions 例のとおり） ----
+      - name: Import Apple Developer Certificate
+        if: env.HAS_SIGNING == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo $APPLE_CERTIFICATE | base64 --decode > certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security find-identity -v -p codesigning build.keychain
+          rm certificate.p12
+
+      - name: Use Developer ID signing identity
+        if: env.HAS_SIGNING == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application")
+          CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
+          if [ -z "$CERT_ID" ]; then echo "::error::Developer ID Application certificate not found"; exit 1; fi
+          echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> "$GITHUB_ENV"
+          echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE" >> "$GITHUB_ENV"
+          echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD" >> "$GITHUB_ENV"
+          echo "Certificate imported."
+
+      # ---- 公証（App Store Connect API。APPLE_API_KEY_PATH は秘密鍵ファイルのパス） ----
+      - name: Prepare App Store Connect API key for notarization
+        if: env.HAS_SIGNING == 'true' && env.HAS_NOTARIZATION == 'true'
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: |
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          printf '%s' "$APPLE_API_PRIVATE_KEY" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY=$APPLE_API_KEY" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      # ---- Secrets がないとき: ad-hoc 署名（未公証） ----
+      - name: Use ad-hoc signing (no Apple secrets)
+        if: env.HAS_SIGNING != 'true'
+        # https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing
+        run: echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+
+      - name: Release notes
+        id: notes
+        run: |
+          if [ "$HAS_SIGNING" = "true" ] && [ "$HAS_NOTARIZATION" = "true" ]; then
+            STATUS="この .dmg は Developer ID で署名し、Apple の公証（notarization）を通しています。"
+            HOWTO="ダウンロードした .dmg を開き、Fix Storage GUI.app を「アプリケーション」へドラッグしてください。"
+          elif [ "$HAS_SIGNING" = "true" ]; then
+            STATUS="この .dmg は Developer ID で署名していますが、**公証（notarization）はしていません**。"
+            HOWTO="初回はブロックされることがあります。その場合は README の「未署名・未公証アプリの開き方」を参照してください。"
+          else
+            STATUS="この .dmg は **未署名・未公証** です（ad-hoc 署名のみ。Apple の Developer ID 署名と公証はしていません）。"
+            HOWTO=$(cat <<'TXT'
+          1. .dmg を開き、Fix Storage GUI.app を「アプリケーション」へドラッグします。
+          2. 初回はアプリを開こうとすると macOS にブロックされます。システム設定 → プライバシーとセキュリティ の下の方にある「このまま開く」を押してください（古い macOS では Finder で右クリック →「開く」でも開けます）。
+          3. またはターミナルで次を実行してから開きます:
+             `xattr -dr com.apple.quarantine "/Applications/Fix Storage GUI.app"`
+          TXT
+          )
+          fi
+          {
+            echo "body<<NOTES_EOF"
+            echo "## Fix Storage GUI ${GITHUB_REF_NAME}（macOS universal: Apple Silicon / Intel）"
+            echo
+            echo "$STATUS"
+            echo
+            echo "### 開き方"
+            echo "$HOWTO"
+            echo
+            echo "AI 判定には Sign in with ChatGPT（プレビュー）を使います。対象条件やプライバシーについては README を参照してください。"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Fix Storage GUI ${{ github.ref_name }}'
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+          releaseAssetNamePattern: 'fix-storage-gui_[version]_[arch][ext]'
+          args: '--target universal-apple-darwin --bundles app,dmg'
