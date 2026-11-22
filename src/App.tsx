@@ -376,7 +376,8 @@ export default function App() {
           }}
           disk={disk}
           canResume={flow.hasScan}
-          onResume={() => go("review")}
+          resumeLabel={canGo(flow, "review", 0) ? "前回の一覧に戻る" : "前回の AI 判定に戻る"}
+          onResume={() => go(canGo(flow, "review", 0) ? "review" : "ai")}
         />
       );
       break;
