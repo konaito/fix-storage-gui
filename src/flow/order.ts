@@ -6,12 +6,14 @@ import { squarify, type Rect, type TreemapTile } from "./treemap";
 /**
  * How the list / treemap is ordered.
  * - "size": biggest first (default before AI judgement).
- * - "recommended": what looks safe to delete first — 削除していい → 注意 → 消しちゃダメ → 保護,
+ * - "recommended": what looks safe to delete first — 削除していい → 注意 → 未判定 → 消しちゃダメ → 保護,
  *   biggest first inside each group (default after AI judgement).
  */
 export type SortMode = "recommended" | "size";
 
-export const BUCKET_ORDER: Bucket[] = ["safe", "caution", "keep", "locked"];
+export const BUCKET_ORDER: Bucket[] = ["safe", "caution", "pending", "keep", "locked"];
+/** Groups that can't be selected go into the short band at the bottom in recommended mode. */
+const BAND: Bucket[] = ["pending", "keep", "locked"];
 
 export interface Sizable {
   path: string;
@@ -80,7 +82,7 @@ function layoutGroups<T extends Sizable>(rows: T[], buckets: Bucket[], rect: Rec
 /**
  * Treemap for the review step.
  * size: one treemap of everything, area ∝ size (colour shows the verdict).
- * recommended: 削除していい / 注意 get the main canvas (safe group top-left), and 消しちゃダメ / 保護
+ * recommended: 削除していい / 注意 get the main canvas (safe group top-left), and 未判定 / 消しちゃダメ / 保護
  * are pushed into a short band at the bottom. Inside every group area stays proportional to size.
  */
 export function layoutTreemap<T extends Sizable>(rows: T[], mode: SortMode, w: number, h: number): TreemapLayout {
@@ -97,7 +99,7 @@ export function layoutTreemap<T extends Sizable>(rows: T[], mode: SortMode, w: n
     return out;
   }
   const active = rows.filter((r) => ["safe", "caution"].includes(bucketOf(r.final)) && r.size > 0);
-  const rest = rows.filter((r) => ["keep", "locked"].includes(bucketOf(r.final)) && r.size > 0);
+  const rest = rows.filter((r) => BAND.includes(bucketOf(r.final)) && r.size > 0);
   if (active.length === 0 || rest.length === 0) {
     layoutGroups(rows, BUCKET_ORDER, { x: 0, y: 0, w, h }, out);
     return out;
@@ -105,6 +107,6 @@ export function layoutTreemap<T extends Sizable>(rows: T[], mode: SortMode, w: n
   const bandH = Math.round(h * KEEP_BAND);
   layoutGroups(active, ["safe", "caution"], { x: 0, y: 0, w, h: h - bandH }, out);
   out.bandY = h - bandH;
-  layoutGroups(rest, ["keep", "locked"], { x: 0, y: h - bandH, w, h: bandH }, out);
+  layoutGroups(rest, BAND, { x: 0, y: h - bandH, w, h: bandH }, out);
   return out;
 }

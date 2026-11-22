@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { backTarget, canGo, flowReducer, initialFlow, stepStatus, type FlowEvent, type FlowState } from "../src/flow/steps";
+import { backTarget, canGo, flowReducer, initialFlow, stepStatus, stepsFor, type FlowEvent, type FlowState } from "../src/flow/steps";
 import { applyFilter, elapsedJa, phaseStates, ratio, safePaths, summarize } from "../src/flow/progress";
 import { mergeVerdict } from "../src/safety/merge";
 
@@ -123,5 +123,56 @@ describe("progress helpers", () => {
     expect(applyFilter(rows, "locked").map((r) => r.path)).toEqual(["/c", "/d"]);
     expect(applyFilter(rows, "all")).toHaveLength(4);
     expect(safePaths(rows)).toEqual(["/a"]);
+  });
+});
+
+describe("signed-in users: AI judgement comes before the list (#12)", () => {
+  const ai = run([{ type: "mode", aiFirst: true, aiTargets: 0 }]);
+  const scannedAi = run([{ type: "scanStart" }, { type: "scanEnd", ok: true, aiTargets: 5 }], ai);
+
+  it("step order is target → scanning → ai → review → trash → done", () => {
+    expect(stepsFor(true).map((s) => s.id)).toEqual(["target", "scanning", "ai", "review", "trash", "done"]);
+    expect(stepsFor(true).map((s) => s.n)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(stepsFor(false).map((s) => s.id)).toEqual(["target", "scanning", "review", "ai", "trash", "done"]);
+  });
+  it("a finished scan goes to the AI step, and the list stays closed until the AI has run", () => {
+    expect(scannedAi.step).toBe("ai");
+    expect(canGo(scannedAi, "review", 0)).toBe(false);
+    expect(run([{ type: "go", to: "review", selected: 0 }], scannedAi).step).toBe("ai");
+  });
+  it("the list opens after an AI run, even a failed one (unjudged items stay unselectable)", () => {
+    const failed = run([{ type: "aiStart" }, { type: "aiEnd", ok: false }], scannedAi);
+    expect(canGo(failed, "review", 0)).toBe(true);
+    const ok = run([{ type: "aiStart" }, { type: "aiEnd", ok: true }], scannedAi);
+    expect(canGo(ok, "review", 0)).toBe(true);
+  });
+  it("nothing to send (empty or all protected) goes straight to the list", () => {
+    const s = run([{ type: "scanStart" }, { type: "scanEnd", ok: true, aiTargets: 0 }], ai);
+    expect(s.step).toBe("review");
+  });
+  it("a new scan closes the list again", () => {
+    const judged = run([{ type: "aiStart" }, { type: "aiEnd", ok: true }, { type: "go", to: "review", selected: 0 }], scannedAi);
+    const again = run([{ type: "scanStart" }, { type: "scanEnd", ok: true, aiTargets: 3 }], judged);
+    expect(again.step).toBe("ai");
+    expect(canGo(again, "review", 0)).toBe(false);
+  });
+  it("back goes ai → target and review → ai", () => {
+    expect(backTarget(scannedAi)).toBe("target");
+    const judged = run([{ type: "aiStart" }, { type: "aiEnd", ok: true }, { type: "go", to: "review", selected: 0 }], scannedAi);
+    expect(backTarget(judged)).toBe("ai");
+  });
+  it("the AI step is never shown as skipped", () => {
+    const judged = run([{ type: "aiStart" }, { type: "aiEnd", ok: false }, { type: "go", to: "review", selected: 0 }], scannedAi);
+    expect(stepStatus(judged, "ai")).toBe("done");
+    expect(stepStatus(scannedAi, "review")).toBe("upcoming");
+  });
+  it("turning AI on after a rule-only scan sends the user to the AI step", () => {
+    const s = run([{ type: "mode", aiFirst: true, aiTargets: 4 }], scanned);
+    expect(s.step).toBe("ai");
+    expect(canGo(s, "review", 0)).toBe(false);
+  });
+  it("rule-only users keep the old order", () => {
+    expect(scanned.step).toBe("review");
+    expect(backTarget(run([{ type: "go", to: "ai", selected: 0 }], scanned))).toBe("review");
   });
 });

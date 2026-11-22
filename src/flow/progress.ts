@@ -37,7 +37,7 @@ export interface VerdictSummary {
   size: number;
 }
 
-export type Bucket = AiVerdict | "locked";
+export type Bucket = AiVerdict | "locked" | "pending";
 
 /** Counts for the summary cards. Locked items (hard block / system) are their own bucket. */
 export function summarize<T extends { size: number; final: FinalVerdict }>(rows: T[]): Record<Bucket | "all", VerdictSummary> {
@@ -47,6 +47,7 @@ export function summarize<T extends { size: number; final: FinalVerdict }>(rows:
     caution: { count: 0, size: 0 },
     keep: { count: 0, size: 0 },
     locked: { count: 0, size: 0 },
+    pending: { count: 0, size: 0 },
   };
   for (const r of rows) {
     const b = bucketOf(r.final);
@@ -59,7 +60,7 @@ export function summarize<T extends { size: number; final: FinalVerdict }>(rows:
 }
 
 export function bucketOf(f: FinalVerdict): Bucket {
-  return f.locked ? "locked" : f.verdict;
+  return f.locked ? "locked" : f.source === "pending" ? "pending" : f.verdict;
 }
 
 export type Filter = "all" | Bucket;

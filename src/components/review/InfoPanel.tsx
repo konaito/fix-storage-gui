@@ -3,7 +3,7 @@ import { api, type PreviewResult } from "../../lib/api";
 import { describeError } from "../../lib/errors";
 import { agoJa, formatBytes, isoDate } from "../../lib/format";
 import { kindLabel, locationParts } from "../../lib/kind";
-import { AI_VERDICT_JA, CATEGORY_JA, CLI_VERDICT_JA } from "../../lib/labels";
+import { AI_VERDICT_JA, CATEGORY_JA, CLI_VERDICT_JA, sourceJa, verdictClass, verdictJa, whyNotSelectable } from "../../lib/labels";
 import type { Row } from "../../lib/rows";
 import { selectable } from "../../safety/merge";
 import { useGate } from "../GateContext";
@@ -74,7 +74,7 @@ export function InfoPanel({ row, home, selected, onToggle, onDrill }: Props) {
   const res = pv && pv.path === row.path ? pv.result : null;
   const loading = !!pv && pv.path === row.path && pv.loading;
   const thumb = res?.preview.kind === "image" ? res.preview.dataUrl : null;
-  const lockedWhy = row.final.locked ? row.final.reason : row.final.verdict === "keep" ? "「消しちゃダメ」の判定" : null;
+  const lockedWhy = whyNotSelectable(row.final);
 
   return (
     <aside className="info-panel" aria-label="選択中の項目の情報">
@@ -100,8 +100,8 @@ export function InfoPanel({ row, home, selected, onToggle, onDrill }: Props) {
         <dl>
           <dt>結果</dt>
           <dd>
-            <span className={`badge ${row.final.verdict}`}>{AI_VERDICT_JA[row.final.verdict]}</span>{" "}
-            <span className="muted tiny">{row.final.source === "hard-block" ? "保護リスト" : row.final.source === "cli" ? "元CLIのルール" : "AI＋ルール"}</span>
+            <span className={`badge ${verdictClass(row.final)}`}>{verdictJa(row.final)}</span>{" "}
+            <span className="muted tiny">{sourceJa(row.final)}</span>
             {row.final.reason && <div className="tiny">{row.final.reason}</div>}
           </dd>
           <dt>元 CLI</dt>

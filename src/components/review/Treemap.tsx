@@ -3,11 +3,11 @@ import { layoutTreemap, type SortMode } from "../../flow/order";
 import type { Bucket } from "../../flow/progress";
 import { middleEllipsis } from "../../flow/treemap";
 import { formatBytes } from "../../lib/format";
-import { AI_VERDICT_JA } from "../../lib/labels";
+import { AI_VERDICT_JA, BUCKET_JA } from "../../lib/labels";
 import type { Row } from "../../lib/rows";
 import { ItemIcon } from "./icons";
 
-const GROUP_JA: Record<Bucket, string> = { safe: AI_VERDICT_JA.safe, caution: AI_VERDICT_JA.caution, keep: AI_VERDICT_JA.keep, locked: "保護" };
+const GROUP_JA: Record<Bucket, string> = BUCKET_JA;
 const GAP = 3;
 
 interface Props {
@@ -71,8 +71,8 @@ export function Treemap({ rows, mode, focus, selected, onFocus, onToggle, onDril
               role="button"
               tabIndex={0}
               aria-pressed={focus === r.path}
-              aria-label={`${r.name}、${formatBytes(r.size)}、${t.bucket === "locked" ? "保護" : AI_VERDICT_JA[r.final.verdict]}${on ? "、ゴミ箱の候補" : ""}`}
-              title={`${r.path}\n${formatBytes(r.size)}・${t.bucket === "locked" ? "保護（選べません）" : AI_VERDICT_JA[r.final.verdict]}${r.dir ? "\nダブルクリックで中を見る" : ""}`}
+              aria-label={`${r.name}、${formatBytes(r.size)}、${BUCKET_JA[t.bucket]}${on ? "、ゴミ箱の候補" : ""}`}
+              title={`${r.path}\n${formatBytes(r.size)}・${BUCKET_JA[t.bucket]}${t.selectable ? "" : "（選べません）"}${r.dir ? "\nダブルクリックで中を見る" : ""}`}
               className={`tile ${t.bucket} ${focus === r.path ? "focus" : ""} ${on ? "on" : ""}`}
               style={{ left: t.x + GAP / 2, top: t.y + GAP / 2, width: w, height: h }}
               onClick={() => onFocus(r.path)}
@@ -135,6 +135,12 @@ export function Treemap({ rows, mode, focus, selected, onFocus, onToggle, onDril
           <span className="dot-mark locked" />
           保護
         </span>
+        {rows.some((r) => r.final.source === "pending") && (
+          <span>
+            <span className="dot-mark pending" />
+            {BUCKET_JA.pending}
+          </span>
+        )}
         <span className="muted">面積＝サイズ・クリックで詳細・右上の○でゴミ箱の候補に追加・フォルダはダブルクリックで中へ</span>
         {hidden > 0 && <span className="muted">（小さすぎて描けない {hidden} 件はリスト表示で確認できます）</span>}
       </div>

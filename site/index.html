@@ -70,11 +70,11 @@
           <ul class="badges">
             <li>macOS 専用</li>
             <li>Apple Silicon / Intel（universal）</li>
-            <li>Developer ID 署名 + 公証済み（v0.2.0）</li>
+            <li>Developer ID 署名 + 公証済み（v0.2.1）</li>
           </ul>
           <p class="hero-note">
             Windows・Linux には対応していません。
-            最新の GitHub Release（現在の v0.2.0）の <code>.dmg</code> は Developer ID で署名され、Apple の公証（notarization）を通しています。
+            最新の GitHub Release（現在の v0.2.1）の <code>.dmg</code> は Developer ID で署名され、Apple の公証（notarization）を通しています。
             開いて <code>Fix Storage GUI.app</code> を「アプリケーション」へドラッグしてください。
           </p>
           <div class="storage-bar" aria-hidden="true">
@@ -101,21 +101,24 @@
               <p>「Mac 全体（元 CLI と同じフォルダ群）」か、任意のフォルダを選びます。</p>
             </li>
             <li>
+              <h3>AI 判定</h3>
+              <p>
+                スキャンが終わると、AI に送る内容の確認ダイアログが開きます。
+                送信すると「削除していい / 注意 / 消しちゃダメ」と理由を日本語で表示します。
+                判定には Sign in with ChatGPT を使い、25 件ずつのバッチを最大 3 本まで同時に送ります。
+                ChatGPT プランの利用を許可していない場合、AI 判定は使えず、一覧は元 CLI のルールで判定します。
+              </p>
+            </li>
+            <li>
               <h3>重いもの一覧</h3>
               <p>
                 サイズに比例したツリーマップ（表形式にも切り替え可）で、最終使用日（Spotlight の
                 <code>kMDItemLastUsedDate</code>）、更新日、元 CLI のカテゴリと判定を表示します。
                 AI 判定のあとは「削除していい」ものを優先して並べます。
+                AI が判定していない項目は「未判定」になり、選べません。
                 項目を選ぶと右側に詳細と、この Mac の中だけで作るプレビューが出ます
                 （保護対象や鍵らしいファイルは中身を開きません）。
                 フォルダは「中を見る」で掘り下げられます。
-              </p>
-            </li>
-            <li>
-              <h3>AI 判定</h3>
-              <p>
-                「削除していい / 注意 / 消しちゃダメ」と理由を日本語で表示します。
-                判定には Sign in with ChatGPT を使い、25 件ずつのバッチを最大 3 本まで同時に送ります。
               </p>
             </li>
             <li>
@@ -349,7 +352,7 @@
           <h2>macOS 向けにダウンロード</h2>
           <p>
             最新の GitHub Release から universal の <code>.dmg</code> を入手できます。
-            現在の最新版は v0.2.0 で、Developer ID 署名と Apple の公証を通しています。
+            現在の最新版は v0.2.1 で、Developer ID 署名と Apple の公証を通しています。
             v0.2.0 からは、アプリ自身が新しいバージョンを見つけて、アプリの中から更新できます
             （v0.1.x からは、この版だけ手動で入れ替えてください）。
           </p>

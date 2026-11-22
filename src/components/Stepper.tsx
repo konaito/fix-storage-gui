@@ -1,4 +1,4 @@
-import { STEPS, stepStatus, type FlowState, type StepId } from "../flow/steps";
+import { stepStatus, stepsFor, type FlowState, type StepId } from "../flow/steps";
 
 interface Props {
   flow: FlowState;
@@ -11,7 +11,7 @@ export function Stepper({ flow, canGo, onGo }: Props) {
   return (
     <nav className="stepper" aria-label="進み具合">
       <ol>
-        {STEPS.map((s) => {
+        {stepsFor(flow.aiFirst).map((s) => {
           const st = stepStatus(flow, s.id);
           const clickable = st !== "current" && canGo(s.id);
           const busyHere = st === "current" && flow.busy !== null;
@@ -30,7 +30,7 @@ export function Stepper({ flow, canGo, onGo }: Props) {
                 <span className="step-label" aria-hidden="true">
                   <span className="step-label-full">{s.label}</span>
                   <span className="step-label-short">{s.shortLabel}</span>
-                  {s.id === "ai" && <span className="opt">{st === "skipped" ? "スキップ" : "任意"}</span>}
+                  {s.id === "ai" && !flow.aiFirst && <span className="opt">{st === "skipped" ? "スキップ" : "任意"}</span>}
                 </span>
               </button>
             </li>

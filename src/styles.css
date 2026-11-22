@@ -123,8 +123,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 }
 .app-bar .brand h1 { font-size: 15px; margin: 0; }
 .app-bar .app-icon { width: 30px; height: 30px; }
-.app-bar .stepper { flex: 1; min-width: 0; background: transparent; border: none; padding: 0; }
-.app-bar-tools { display: flex; align-items: center; gap: 8px; flex: none; }
+/* Brand and tools take equal widths so the stepper sits in the middle of the window. The stepper leaves
+   240px on each side (the tools with the free-space chip are about 226px), so the sides stay equal
+   down to a window of about 1130px. Full labels need about 790px, short ones about 590px. */
+.app-bar .brand { flex: 1 1 0; min-width: max-content; }
+.app-bar .stepper { flex: 0 1 clamp(600px, calc(100% - 480px), 880px); min-width: 0; background: transparent; border: none; padding: 0; }
+.app-bar-tools { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: 1 1 0; min-width: max-content; }
 @media (max-width: 1360px) { .app-bar .brand .version { display: none; } .app-bar .step .opt { display: none; } }
 .brand { display: flex; align-items: center; gap: 12px; }
 .app-icon { width: 34px; height: 34px; display: block; flex: none; user-select: none; }
@@ -162,9 +166,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 
 /* ---------- Stepper ---------- */
 .stepper { flex: none; background: var(--bg-elev); border-bottom: 1px solid var(--line); padding: 10px 24px; container-type: inline-size; container-name: stepper; }
-.stepper ol { list-style: none; margin: 0 auto; padding: 0; display: flex; gap: 4px; max-width: 1392px; overflow-x: auto; }
-.step { flex: 1; min-width: 0; position: relative; }
-.step + .step::before { content: ""; position: absolute; left: -2px; top: 50%; width: 4px; height: 1px; background: var(--line-strong); }
+.stepper ol { list-style: none; margin: 0 auto; padding: 0; display: flex; justify-content: center; gap: 16px; max-width: 1392px; overflow-x: auto; }
+.step { flex: 0 1 auto; min-width: 0; position: relative; }
+.step + .step::before { content: ""; position: absolute; left: -13px; top: 50%; width: 10px; height: 1px; background: var(--line-strong); }
 .step button {
   width: 100%; display: flex; align-items: center; gap: 8px; border: none; background: transparent; box-shadow: none;
   padding: 6px 8px; border-radius: 9px; text-align: left; color: var(--text-3); white-space: nowrap;
@@ -178,7 +182,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .step-label { font-size: 12px; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; min-width: 0; }
 .step-label-short { display: none; }
 /* The stepper is narrower than the window (brand + tools sit beside it), so switch on its own width. */
-@container stepper (max-width: 1100px) {
+@container stepper (max-width: 840px) {
   .step-label-full { display: none; }
   .step-label-short { display: inline; }
 }
@@ -293,6 +297,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .stat.caution .stat-label { color: var(--warn); }
 .stat.keep .stat-label { color: var(--keep); }
 .stat.locked .stat-label { color: var(--lock); }
+.stat.pending .stat-label { color: var(--text-2); }
 .toolbar { margin-bottom: 8px; }
 
 .table-wrap { border: 1px solid var(--line); border-radius: 10px; overflow: auto; max-height: calc(100vh - 400px); min-height: 200px; }
@@ -315,6 +320,7 @@ td.verdict { min-width: 160px; }
 .badge.safe { background: var(--ok-soft); color: var(--ok); }
 .badge.caution { background: var(--warn-soft); color: var(--warn); }
 .badge.keep { background: var(--keep-soft); color: var(--keep); }
+.badge.pending { background: var(--lock-soft); color: var(--text-2); }
 
 .sel-summary strong { font-variant-numeric: tabular-nums; }
 
@@ -416,6 +422,8 @@ button.chatgpt-button.login-cta { padding: 12px 30px; font-size: 16px; min-width
 .group-box.safe { box-shadow: inset 0 0 0 2px rgba(52, 199, 89, 0.55); background: rgba(52, 199, 89, 0.08); }
 .group-box.caution { box-shadow: inset 0 0 0 2px rgba(255, 159, 10, 0.45); background: rgba(255, 159, 10, 0.06); }
 .group-box.keep, .group-box.locked { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); }
+/* 未判定 (#12): the plain tile colour, i.e. no verdict yet. */
+.group-box.pending { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); }
 .group-head {
   position: absolute; left: 8px; top: 2px; height: 18px; display: flex; align-items: center; gap: 6px;
   font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
@@ -465,6 +473,7 @@ button.chatgpt-button.login-cta { padding: 12px 30px; font-size: 16px; min-width
 .dot-mark.caution { background: var(--tile-caution); }
 .dot-mark.keep { background: var(--tile-keep); }
 .dot-mark.locked { background: repeating-linear-gradient(135deg, #8e8e93 0 3px, #636366 3px 6px); }
+.dot-mark.pending { background: var(--tile); }
 .ico { display: block; flex: none; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25)); }
 
 .info-panel {
@@ -508,6 +517,7 @@ button.chatgpt-button.login-cta { padding: 12px 30px; font-size: 16px; min-width
 .denied-mini { padding: 6px 12px; margin-bottom: 10px; font-size: 12px; }
 .step-page.review .toolbar { margin-bottom: 10px; }
 .step-page.review .stats.tight { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.step-page.review .stats.tight.six { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .step-page.review .stats.tight .stat-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 /* Short windows: one-line explanation only, smaller cards, to give the map room. */
 @media (max-height: 760px) {
