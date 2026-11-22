@@ -9,6 +9,7 @@ import { AiSendDialog } from "./components/AiSendDialog";
 import { Modal } from "./components/Modal";
 import { Stepper } from "./components/Stepper";
 import { AiStep, type AiOutcome, type AiRun } from "./components/steps/AiStep";
+import { useGate } from "./components/GateContext";
 import { DoneStep } from "./components/steps/DoneStep";
 import { ReviewStep } from "./components/steps/ReviewStep";
 import { ScanningStep } from "./components/steps/ScanningStep";
@@ -73,7 +74,12 @@ export default function App() {
 
   const active = status?.accounts.find((a) => a.clientId === status.active);
   const signedIn = !!active?.signedIn;
-  const planReady = signedIn && !!active?.planEnabled;
+  // AI judgement needs both this app's view of the account and the login gate's plan-use consent.
+  const gate = useGate();
+  const planReady = gate.planEnabled && signedIn && !!active?.planEnabled;
+  useEffect(() => {
+    if (gate.statusVersion > 0) void refreshStatus();
+  }, [gate.statusVersion, refreshStatus]);
 
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
@@ -193,7 +199,7 @@ export default function App() {
 
   async function sendToAi(mask: boolean) {
     setAiDialog(false);
-    if (!env || !model || flow.busy) return;
+    if (!env || !model || flow.busy || !planReady) return;
     const maskOpts = { enabled: mask, home: env.home, user: env.user };
     const indexed = aiTargets.map((r, i) => ({ id: `i${i}`, row: r }));
     const batches = chunk(indexed, BATCH);
@@ -357,6 +363,7 @@ export default function App() {
         <AiStep
           planReady={planReady}
           signedIn={signedIn}
+          onEnablePlan={gate.enablePlan}
           modelName={modelInfo?.displayName ?? null}
           modelsLoading={modelsLoading}
           destination={PROVIDER.destination}
@@ -485,7 +492,7 @@ export default function App() {
       </div>
       </div>
 
-      {aiDialog && env && (
+      {aiDialog && env && planReady && (
         <AiSendDialog
           rows={aiTargets}
           provider={PROVIDER}

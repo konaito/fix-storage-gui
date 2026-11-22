@@ -34,6 +34,8 @@ interface Props {
   summary: Record<Bucket | "all", VerdictSummary>;
   selectedCount: number;
   onOpenSend: () => void;
+  /** Re-consent to ChatGPT plan usage (from the login gate). */
+  onEnablePlan?: () => void;
   onStop: () => void;
   onGoReview: () => void;
   onGoTrash: () => void;
@@ -90,7 +92,17 @@ export function AiStep(p: Props) {
           <strong>ChatGPT にサインインすると使えます。</strong>右の「ChatGPT プランを使う」からサインインしてください。AI を使わずに次へ進むこともできます。
         </div>
       ) : !p.planReady ? (
-        <div className="callout warn-box">このアカウントでは ChatGPT プランの利用が許可されていません。右のパネルから有効にできます。</div>
+        <div className="callout warn-box">
+          <p>
+            <strong>ルール判定のみモードです。</strong>このアカウントでは ChatGPT プランの使用が許可されていないため、AI 判定はオフです。OpenAI
+            には何も送りません。判定は元 CLI のルールとハードブロックだけで行っています。このステップは飛ばして、そのまま一覧やゴミ箱へ移動の確認に進めます。
+          </p>
+          {p.onEnablePlan && (
+            <button type="button" className="chatgpt-button" onClick={p.onEnablePlan}>
+              ChatGPT プランの利用を有効にする
+            </button>
+          )}
+        </div>
       ) : p.modelsLoading ? (
         <div className="callout row">
           <span className="spinner tiny-spin" /> モデル一覧を取得しています…

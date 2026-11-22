@@ -12,6 +12,7 @@ interface Props {
   onCancelSignIn: () => void;
   onReload: () => void;
   onSignOut: () => void;
+  onContinueWithoutPlan: (clientId: string) => void;
   onDismissNotice: () => void;
   onOpenDoc: (url: string) => void;
   onManageUsage: () => void;
@@ -97,16 +98,22 @@ function SignInPanel(p: Props) {
       <>
         <h2 id="login-title">ChatGPT プランの利用が許可されていません</h2>
         <p>
-          <strong>{v.account.label}</strong> でサインインしていますが、ChatGPT プランの使用が許可されていないため、このアプリは使えません。
-          ブラウザの許可画面で「ChatGPT プランの使用」を許可してください。
+          <strong>{v.account.label}</strong> でサインインしていますが、ChatGPT プランの使用が許可されていません。AI 判定を使うには、ブラウザの許可画面で「ChatGPT
+          プランの使用」を許可してください。
         </p>
         {p.error && <ErrorBox {...p} />}
-        <div className="row">
+        <div className="login-actions">
           <button className="chatgpt-button" onClick={() => p.onSignIn(v.account.clientId, true)}>
             ChatGPT プランの利用を有効にする
           </button>
-          <button onClick={p.onSignOut}>サインアウト</button>
+          <button onClick={() => p.onContinueWithoutPlan(v.account.clientId)}>AI 判定なしで続ける（ルール判定のみ）</button>
         </div>
+        <p className="muted small">
+          AI 判定なしで続けると、元 CLI のルールとハードブロックだけで判定します。OpenAI には何も送りません。あとからアプリ内でいつでも ChatGPT プランの利用を有効にできます。
+        </p>
+        <button className="link" onClick={p.onSignOut}>
+          サインアウト
+        </button>
       </>
     );
   }
