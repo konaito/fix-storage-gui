@@ -21,9 +21,17 @@ export interface ScanResult {
 }
 
 export interface ScanProgress {
+  /** Which part of the scan is running (see src-tauri/src/scan.rs). total is 0 while listing (unknown). */
+  phase: "listing" | "measuring" | "dates";
   current: string;
   done: number;
   total: number;
+}
+
+export interface TrashProgress {
+  done: number;
+  total: number;
+  current: string;
 }
 
 export interface TrashOutcome {

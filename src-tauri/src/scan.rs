@@ -50,6 +50,9 @@ pub struct DiskSpace {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
+    /// "listing" (reading folders; total is 0 = unknown), "measuring" (du per item),
+    /// "dates" (Spotlight last-used dates). `done`/`total` count items within the phase.
+    pub phase: &'static str,
     pub current: String,
     pub done: usize,
     pub total: usize,
@@ -156,12 +159,13 @@ pub fn parse_mdls_date(value: &str) -> Option<f64> {
 }
 
 /// Spotlight last-used dates, 40 paths per mdls call, like fix-storage's `usage()`.
-fn last_used(paths: &[String]) -> Vec<Option<f64>> {
+fn last_used(paths: &[String], on_progress: &dyn Fn(Progress)) -> Vec<Option<f64>> {
     let mut result = vec![None; paths.len()];
     if !cfg!(target_os = "macos") {
         return result;
     }
     for (chunk_i, batch) in paths.chunks(40).enumerate() {
+        on_progress(Progress { phase: "dates", current: batch[0].clone(), done: chunk_i * 40, total: paths.len() });
         let out = Command::new("mdls").args(["-raw", "-name", "kMDItemLastUsedDate"]).args(batch).stderr(Stdio::null()).output();
         let Ok(out) = out else { continue };
         let text = String::from_utf8_lossy(&out.stdout);
@@ -188,10 +192,18 @@ fn holds_root(path: &str, roots: &[Root]) -> bool {
 
 /// Collects what to measure. `whole_mac`: every fix-storage root, children measured one by one,
 /// nested roots measured on their own so nothing is counted twice. Otherwise: the children of `folder`.
-fn collect_units(start: &[String], roots: &[Root], root_paths: &HashSet<String>, nested_aware: bool, denied: &mut Vec<String>) -> Vec<Unit> {
+fn collect_units(
+    start: &[String],
+    roots: &[Root],
+    root_paths: &HashSet<String>,
+    nested_aware: bool,
+    denied: &mut Vec<String>,
+    on_progress: &dyn Fn(Progress),
+) -> Vec<Unit> {
     let mut units = Vec::new();
     let mut queue: VecDeque<String> = start.iter().cloned().collect();
     while let Some(dir) = queue.pop_front() {
+        on_progress(Progress { phase: "listing", current: dir.clone(), done: units.len(), total: 0 });
         let entries = match fs::read_dir(&dir) {
             Ok(e) => e,
             Err(e) => {
@@ -234,15 +246,16 @@ pub struct ScanOptions {
 }
 
 pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn(Progress) + Send + Sync + 'static) -> ScanResult {
+    let on_progress = Arc::new(on_progress);
     let roots = mac_roots(&opts.home);
     let root_paths: HashSet<String> = roots.iter().map(|r| r.path.clone()).collect();
     let mut denied = Vec::new();
     let units = match &opts.folder {
         None => {
             let start: Vec<String> = roots.iter().map(|r| r.path.clone()).collect();
-            collect_units(&start, &roots, &root_paths, true, &mut denied)
+            collect_units(&start, &roots, &root_paths, true, &mut denied, &*on_progress)
         }
-        Some(folder) => collect_units(&[folder.clone()], &roots, &root_paths, false, &mut denied),
+        Some(folder) => collect_units(&[folder.clone()], &roots, &root_paths, false, &mut denied, &*on_progress),
     };
 
     let total = units.len();
@@ -250,7 +263,7 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     let denied_m = Arc::new(Mutex::new(denied));
     let queue = Arc::new(Mutex::new(units.into_iter().collect::<VecDeque<_>>()));
     let done = Arc::new(AtomicUsize::new(0));
-    let on_progress = Arc::new(on_progress);
+    on_progress(Progress { phase: "measuring", current: String::new(), done: 0, total });
     let workers = 6;
     let mut handles = Vec::new();
     for _ in 0..workers {
@@ -265,7 +278,7 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
             match unit {
                 Unit::File(path, bytes) => measured.lock().unwrap().push((path, bytes, false)),
                 Unit::Dir(path) => {
-                    on_progress(Progress { current: path.clone(), done: done.load(Ordering::Relaxed), total });
+                    on_progress(Progress { phase: "measuring", current: path.clone(), done: done.load(Ordering::Relaxed), total });
                     let r = du(&path, &cancel);
                     if r.denied {
                         denied_m.lock().unwrap().push(path.clone());
@@ -287,7 +300,9 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     list.truncate(opts.limit);
 
     let paths: Vec<String> = list.iter().map(|(p, _, _)| p.clone()).collect();
-    let used = last_used(&paths);
+    on_progress(Progress { phase: "measuring", current: String::new(), done: done.load(Ordering::Relaxed), total });
+    let used = last_used(&paths, &*on_progress);
+    on_progress(Progress { phase: "dates", current: String::new(), done: paths.len(), total: paths.len() });
     let items = list
         .into_iter()
         .zip(used)
@@ -330,11 +345,17 @@ mod tests {
         fs::create_dir_all(dir.join("sub")).unwrap();
         fs::write(dir.join("sub/big.bin"), vec![1u8; 200_000]).unwrap();
         fs::write(dir.join("small.txt"), b"hi").unwrap();
+        let seen: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+        let seen2 = seen.clone();
         let res = run_scan(
             ScanOptions { home: "/nonexistent-home".into(), folder: Some(dir.to_string_lossy().into()), min_size: 0, limit: 100 },
             Arc::new(AtomicBool::new(false)),
-            |_| {},
+            move |p| seen2.lock().unwrap().push(p.phase),
         );
+        let phases = seen.lock().unwrap().clone();
+        assert_eq!(phases.first(), Some(&"listing"));
+        assert!(phases.contains(&"measuring"));
+        assert_eq!(phases.last(), Some(&"dates"));
         assert_eq!(res.items.len(), 2);
         assert_eq!(res.items[0].name, "sub");
         assert!(res.items[0].dir && res.items[0].size >= 200_000);

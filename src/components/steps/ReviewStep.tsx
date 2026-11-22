@@ -1,0 +1,244 @@
+import { useMemo, useState } from "react";
+import { applyFilter, summarize, type Filter } from "../../flow/progress";
+import { api } from "../../lib/api";
+import { agoJa, formatBytes, isoDate } from "../../lib/format";
+import { AI_VERDICT_JA, CATEGORY_JA, CLI_VERDICT_JA } from "../../lib/labels";
+import type { Row } from "../../lib/rows";
+import { selectable } from "../../safety/merge";
+import type { Target } from "./TargetStep";
+
+interface Props {
+  rows: Row[];
+  target: Target;
+  denied: string[];
+  partial: boolean;
+  aiDone: boolean;
+  selected: Set<string>;
+  onToggle: (path: string) => void;
+  onSelectPaths: (paths: string[]) => void;
+  onSelectAllSafe: () => void;
+  onClearSelection: () => void;
+  canGoUp: boolean;
+  onGoUp: () => void;
+  onDrill: (path: string) => void;
+  onRescan: () => void;
+  onChangeTarget: () => void;
+  aiTargets: number;
+  onGoAi: () => void;
+  onGoTrash: () => void;
+}
+
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: "all", label: "すべて" },
+  { id: "safe", label: AI_VERDICT_JA.safe },
+  { id: "caution", label: AI_VERDICT_JA.caution },
+  { id: "keep", label: AI_VERDICT_JA.keep },
+  { id: "locked", label: "保護（選べません）" },
+];
+
+export function ReviewStep(p: Props) {
+  const [filter, setFilter] = useState<Filter>("all");
+  const sum = useMemo(() => summarize(p.rows), [p.rows]);
+  const shown = useMemo(() => applyFilter(p.rows, filter), [p.rows, filter]);
+  const chosen = p.rows.filter((r) => p.selected.has(r.path) && selectable(r.final));
+  const chosenSize = chosen.reduce((s, r) => s + r.size, 0);
+  const shownSelectable = shown.filter((r) => selectable(r.final));
+  const allShownChecked = shownSelectable.length > 0 && shownSelectable.every((r) => p.selected.has(r.path));
+
+  return (
+    <section className="step-page review">
+      <header className="step-head row space">
+        <div>
+          <div className="eyebrow">ステップ 3</div>
+          <h2>一覧を確認して、ゴミ箱に移すものを選ぶ</h2>
+          <div className="row small muted">
+            {p.canGoUp && (
+              <button type="button" className="link" onClick={p.onGoUp}>
+                ← 上のフォルダへ
+              </button>
+            )}
+            <span className="crumb" title={p.target.kind === "folder" ? p.target.path : undefined}>
+              <span>{p.target.kind === "mac" ? "Mac 全体" : p.target.path}</span>
+            </span>
+          </div>
+        </div>
+        <div className="row">
+          <button type="button" onClick={p.onChangeTarget}>
+            対象を変える
+          </button>
+          <button type="button" onClick={p.onRescan}>
+            再スキャン
+          </button>
+        </div>
+      </header>
+
+      {p.partial && <div className="notice">スキャンを途中で中止したため、途中までの結果です。</div>}
+
+      {p.rows.length === 0 ? (
+        <div className="empty">
+          <div className="empty-icon" aria-hidden="true">🎉</div>
+          <h3>条件に合う大きな項目は見つかりませんでした</h3>
+          <p className="muted">最小サイズを小さくするか、別のフォルダを選んでもう一度スキャンしてみてください。</p>
+          <button type="button" className="primary" onClick={p.onChangeTarget}>
+            スキャン対象を変える
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="stats">
+            <button type="button" className={`stat ${filter === "all" ? "on" : ""}`} onClick={() => setFilter("all")}>
+              <span className="stat-label">見つかった項目</span>
+              <span className="stat-value">{sum.all.count} 件</span>
+              <span className="stat-sub">{formatBytes(sum.all.size)}</span>
+            </button>
+            {(["safe", "caution", "keep", "locked"] as const).map((b) => (
+              <button type="button" key={b} className={`stat ${b} ${filter === b ? "on" : ""}`} onClick={() => setFilter(b)}>
+                <span className="stat-label">{b === "locked" ? "保護" : AI_VERDICT_JA[b]}</span>
+                <span className="stat-value">{sum[b].count} 件</span>
+                <span className="stat-sub">{formatBytes(sum[b].size)}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="toolbar row space">
+            <div className="segmented small" role="tablist" aria-label="絞り込み">
+              {FILTERS.map((f) => (
+                <button key={f.id} type="button" role="tab" aria-selected={filter === f.id} className={filter === f.id ? "on" : ""} onClick={() => setFilter(f.id)}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <div className="row">
+              <button type="button" onClick={p.onSelectAllSafe} disabled={sum.safe.count === 0}>
+                「{AI_VERDICT_JA.safe}」をすべて選択
+              </button>
+              <button type="button" onClick={p.onClearSelection} disabled={chosen.length === 0}>
+                選択を解除
+              </button>
+            </div>
+          </div>
+          {!p.aiDone && <p className="muted small">いまの判定は元 CLI のルールによるものです。ステップ 4 で AI に判定してもらうこともできます（任意）。</p>}
+
+          {shown.length === 0 ? (
+            <div className="empty small-empty">
+              <p className="muted">この絞り込みに当てはまる項目はありません。</p>
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th className="check">
+                      <input
+                        type="checkbox"
+                        aria-label="表示中の選べる項目をすべて選択"
+                        checked={allShownChecked}
+                        disabled={shownSelectable.length === 0}
+                        onChange={() =>
+                          allShownChecked
+                            ? p.onSelectPaths([...p.selected].filter((x) => !shownSelectable.some((r) => r.path === x)))
+                            : p.onSelectPaths([...new Set([...p.selected, ...shownSelectable.map((r) => r.path)])])
+                        }
+                      />
+                    </th>
+                    <th>名前</th>
+                    <th className="num">サイズ</th>
+                    <th>最終使用 / 更新</th>
+                    <th>元 CLI の判定</th>
+                    <th>判定（AI＋ルール）</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((r) => {
+                    const can = selectable(r.final);
+                    const on = p.selected.has(r.path) && can;
+                    return (
+                      <tr key={r.path} className={`${r.final.locked ? "locked" : ""} ${on ? "checked" : ""}`}>
+                        <td className="check">
+                          <input
+                            type="checkbox"
+                            aria-label={`${r.name} を選択`}
+                            checked={on}
+                            disabled={!can}
+                            title={can ? undefined : r.final.locked ? "保護されているため選べません" : "「消しちゃダメ」の判定なので選べません"}
+                            onChange={() => p.onToggle(r.path)}
+                          />
+                        </td>
+                        <td className="name">
+                          <div className="name-main">
+                            <span aria-hidden="true">{r.final.locked ? "🔒" : r.dir ? "📁" : "📄"}</span> {r.name}
+                          </div>
+                          <div className="muted tiny path">
+                            <span className="cat">{CATEGORY_JA[r.category]}</span>
+                            {r.path}
+                          </div>
+                        </td>
+                        <td className="num strong">{formatBytes(r.size)}</td>
+                        <td className="dates">
+                          <div title={isoDate(r.lastUsedMs) ?? "Spotlight に記録なし"}>{agoJa(r.lastUsedMs)}</div>
+                          <div className="muted tiny" title={isoDate(r.modifiedMs) ?? ""}>
+                            更新 {agoJa(r.modifiedMs)}
+                          </div>
+                        </td>
+                        <td className="small">
+                          <div>{CLI_VERDICT_JA[r.cli.verdict]}</div>
+                          {r.cli.reason && <div className="muted tiny">{r.cli.reason}</div>}
+                        </td>
+                        <td className="small verdict">
+                          <span className={`badge ${r.final.verdict}`}>{AI_VERDICT_JA[r.final.verdict]}</span>
+                          <span className="muted tiny">
+                            {" "}
+                            {r.final.source === "hard-block" ? "保護リスト" : r.final.source === "cli" ? (r.final.locked ? "元CLI" : "元CLIのみ") : "AI"}
+                          </span>
+                          {r.final.reason && <div className="tiny">{r.final.reason}</div>}
+                        </td>
+                        <td className="actions">
+                          <button type="button" className="link" onClick={() => void api.revealInFinder(r.path)}>
+                            Finder
+                          </button>
+                          {r.dir && (
+                            <button type="button" className="link" onClick={() => p.onDrill(r.path)}>
+                              中を見る
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {p.denied.length > 0 && (
+            <details className="card warn-box">
+              <summary>
+                読めなかったフォルダが {p.denied.length} 件あります（システム設定 → プライバシーとセキュリティ → フルディスクアクセス で許可すると計測できます）
+              </summary>
+              <ul className="small">
+                {p.denied.slice(0, 50).map((d) => (
+                  <li key={d}>{d}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </>
+      )}
+
+      <footer className="action-bar">
+        <span className="sel-summary">
+          選択中 <strong>{chosen.length}</strong> 件・約 <strong>{formatBytes(chosenSize)}</strong>
+        </span>
+        <div className="row">
+          <button type="button" onClick={p.onGoAi} disabled={p.aiTargets === 0}>
+            {p.aiDone ? "AI 判定の結果" : "4. AI で判定する"}（{p.aiTargets} 件）
+          </button>
+          <button type="button" className="primary" disabled={chosen.length === 0} onClick={p.onGoTrash}>
+            5. ゴミ箱へ移動の確認へ →
+          </button>
+        </div>
+      </footer>
+    </section>
+  );
+}
