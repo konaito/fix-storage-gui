@@ -1,6 +1,6 @@
 [package]
 name = "fix-storage-gui"
-version = "0.1.0"
+version = "0.1.1"
 description = "Tauri GUI for fix-storage with AI review via Sign in with ChatGPT"
 authors = ["konaito"]
 license = "MIT"
