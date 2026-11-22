@@ -11,11 +11,12 @@ import { Stepper } from "./components/Stepper";
 import { AiStep, type AiOutcome, type AiRun } from "./components/steps/AiStep";
 import { useGate } from "./components/GateContext";
 import { DoneStep } from "./components/steps/DoneStep";
-import { ReviewStep } from "./components/steps/ReviewStep";
+import { ReviewStep, type ReviewView } from "./components/steps/ReviewStep";
 import { ScanningStep } from "./components/steps/ScanningStep";
 import { MIN_SIZES, TargetStep, type Target } from "./components/steps/TargetStep";
 import { TrashStep } from "./components/steps/TrashStep";
 import { safePaths, summarize } from "./flow/progress";
+import { effectiveSort, type SortMode } from "./flow/order";
 import { canGo, flowReducer, initialFlow, type StepId } from "./flow/steps";
 import { api, isSiwcError, type EnvInfo, type Model, type ScanProgress, type SiwcStatus, type TrashOutcome, type TrashProgress } from "./lib/api";
 import { describeError } from "./lib/errors";
@@ -53,6 +54,12 @@ export default function App() {
   const [partial, setPartial] = useState(false);
   const [disk, setDisk] = useState<{ total: number; available: number } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [reviewView, setReviewView] = useState<ReviewView>("map");
+  const [sortChoice, setSortChoice] = useState<SortMode | null>(null);
+  // After the AI has judged the list, go back to the default order (recommended: safe first).
+  useEffect(() => {
+    if (flow.aiDone) setSortChoice(null);
+  }, [flow.aiDone]);
 
   const [aiDialog, setAiDialog] = useState(false);
   const [aiRun, setAiRun] = useState<AiRun | null>(null);
@@ -171,6 +178,7 @@ export default function App() {
       setDisk(res.disk);
       setPartial(res.cancelled);
       setSelected(new Set());
+      setSortChoice(null);
       setAiOutcome(null);
       dispatch({ type: "scanEnd", ok: true });
     } catch (e) {
@@ -359,6 +367,11 @@ export default function App() {
           aiTargets={aiTargets.length}
           onGoAi={() => go("ai")}
           onGoTrash={() => go("trash")}
+          home={env?.home ?? null}
+          view={reviewView}
+          onView={setReviewView}
+          sort={effectiveSort(sortChoice, flow.aiDone)}
+          onSort={setSortChoice}
         />
       );
       break;

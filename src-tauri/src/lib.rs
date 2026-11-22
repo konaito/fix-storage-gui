@@ -1,5 +1,6 @@
 mod app_menu;
 mod docs;
+mod preview;
 mod roots;
 mod safety;
 mod scan;
@@ -16,6 +17,8 @@ use tauri_plugin_opener::OpenerExt;
 struct AppState {
     siwc: siwc::Siwc,
     scan_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    /// Generation of the latest preview request; older requests stop when it changes.
+    preview_gen: Arc<std::sync::atomic::AtomicU64>,
 }
 
 fn home() -> String {
@@ -57,6 +60,20 @@ async fn scan(app: tauri::AppHandle, state: State<'_, AppState>, folder: Option<
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Local-only preview for the detail panel (never sent to the AI). Supersedes any earlier request.
+#[tauri::command]
+async fn preview_item(state: State<'_, AppState>, path: String) -> Result<preview::PreviewResult, String> {
+    let gen = state.preview_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    let current = state.preview_gen.clone();
+    let h = home();
+    tauri::async_runtime::spawn_blocking(move || preview::preview(&path, &h, gen, current)).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn cancel_preview(state: State<'_, AppState>) {
+    state.preview_gen.fetch_add(1, Ordering::SeqCst);
 }
 
 #[tauri::command]
@@ -194,13 +211,15 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             app_menu::install(app)?;
             let dir = app.path().app_data_dir()?.join("siwc");
-            app.manage(AppState { siwc: siwc::Siwc::new(dir), scan_cancel: Mutex::new(None) });
+            app.manage(AppState { siwc: siwc::Siwc::new(dir), scan_cancel: Mutex::new(None), preview_gen: Default::default() });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             env_info,
             scan,
             cancel_scan,
+            preview_item,
+            cancel_preview,
             move_to_trash,
             reveal_in_finder,
             open_usage,

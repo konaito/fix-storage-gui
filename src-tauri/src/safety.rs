@@ -97,7 +97,7 @@ fn blocked_trees(home: &str) -> Vec<(String, &'static str)> {
 }
 
 /// Names that usually hold private keys or secrets.
-fn secret_name(name: &str) -> Option<&'static str> {
+pub(crate) fn secret_name(name: &str) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
     if lower.starts_with("id_rsa") || lower.starts_with("id_ed25519") || lower.starts_with("id_ecdsa") || lower.starts_with("id_dsa") {
         return Some("SSH の秘密鍵");

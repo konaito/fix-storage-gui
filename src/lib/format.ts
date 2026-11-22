@@ -26,6 +26,6 @@ export function agoJa(ms: number | null | undefined, now = Date.now()): string {
   const days = Math.max(0, Math.floor((now - ms) / DAY));
   if (days < 1) return "今日";
   if (days < 30) return `${days}日前`;
-  if (days < 365) return `${Math.floor(days / 30.4)}か月前`;
+  if (days < 365) return `${Math.max(1, Math.floor(days / 30.4))}か月前`;
   return `${Math.floor(days / 365)}年前`;
 }
