@@ -1,58 +1,43 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { api, isSiwcError, type SiwcStatus } from "../lib/api";
+import { api, isSiwcError } from "../lib/api";
 import { describeError } from "../lib/errors";
-import { gateView, ruleOnlyChoice } from "../lib/gate";
-import { GateContext } from "./GateContext";
+import { gateReducer, gateView, initialGate, ruleOnlyChoice, singleFlight, type SiwcChanged } from "../lib/gate";
+import { GateContext, type GateState, type SignInResult } from "./GateContext";
 import { LoginScreen } from "./LoginScreen";
-
-interface SiwcChanged {
-  reason: "signed_in" | "signed_out" | "switched";
-  remoteRevoked: boolean | null;
-}
 
 /**
  * Sign in with ChatGPT is required: nothing inside `children` is rendered until the
  * active account is signed in (tokens in the Keychain) and ChatGPT plan usage is allowed.
- * The gate follows sign-in / sign-out / account switches through the `siwc-changed` event,
- * so the wrapped app does not need to know about it.
+ * The gate follows sign-in / sign-out / account switches / tokens that stopped working through the
+ * `siwc-changed` event, and is the only owner of the sign-in state: the wrapped app reads `status`
+ * and `signingIn` and starts sign-ins through `GateContext` (#29, #30).
  *
  * If the account did not allow ChatGPT plan usage, the user may continue in rule-only mode
  * (original CLI rules + hard block); `GateContext.planEnabled` is then false and AI is off.
  */
 export function LoginGate({ children }: { children: ReactNode }) {
-  const [status, setStatus] = useState<SiwcStatus | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [signingIn, setSigningIn] = useState(false);
-  const [error, setError] = useState<{ message: string; cancelled: boolean } | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [statusVersion, setStatusVersion] = useState(0);
+  const [gate, dispatch] = useReducer(gateReducer, initialGate);
+  const { status, loadError, signingIn, error, notice, statusVersion } = gate;
   // Per-session copy of the remembered "continue without plan usage" choices.
   const [ruleOnly, setRuleOnly] = useState<Record<string, boolean>>({});
 
   const refresh = useCallback(async () => {
     try {
-      setStatus(await api.siwcStatus());
-      setLoadError(null);
+      dispatch({ type: "loaded", status: await api.siwcStatus() });
     } catch (e) {
-      setLoadError(describeError(e));
+      dispatch({ type: "loadFailed", message: describeError(e) });
     }
   }, []);
 
   useEffect(() => {
     void refresh();
     const un = listen<SiwcChanged>("siwc-changed", (e) => {
-      setStatusVersion((v) => v + 1);
+      dispatch({ type: "changed", event: e.payload });
       if (e.payload.reason === "signed_out") {
         // Ask again next time instead of silently entering rule-only mode.
         ruleOnlyChoice.clearAll();
         setRuleOnly({});
-        setError(null);
-        setNotice(
-          e.payload.remoteRevoked === false
-            ? "サインアウトしました。この Mac のトークンは消しましたが、ChatGPT 側での接続解除を確認できませんでした。必要なら ChatGPT の設定からこのアプリの接続を解除してください。"
-            : "サインアウトしました。",
-        );
       }
       void refresh();
     });
@@ -61,28 +46,62 @@ export function LoginGate({ children }: { children: ReactNode }) {
     };
   }, [refresh]);
 
-  async function signIn(clientId: string | null, promptConsent: boolean) {
-    setError(null);
-    setNotice(null);
-    setSigningIn(true);
-    try {
-      await api.siwcSignIn(clientId, promptConsent);
-    } catch (e) {
-      setError({ message: describeError(e), cancelled: isSiwcError(e) && e.kind === "cancelled" });
-    } finally {
-      setSigningIn(false);
-      await refresh();
+  // One sign-in at a time for the whole window, wherever the button was (#30).
+  const runSignIn = useRef(
+    singleFlight(async (clientId: string | null, promptConsent: boolean) => {
+      dispatch({ type: "signInStart" });
+      try {
+        return { account: await api.siwcSignIn(clientId, promptConsent), error: null as unknown };
+      } catch (e) {
+        return { account: null, error: e };
+      } finally {
+        dispatch({ type: "signInEnd" });
+        await refresh();
+      }
+    }),
+  ).current;
+
+  const signIn = useCallback(
+    async (clientId: string | null, promptConsent: boolean): Promise<SignInResult> => {
+      const r = await runSignIn(clientId, promptConsent);
+      return r.started ? { started: true, ...r.value } : r;
+    },
+    [runSignIn],
+  );
+
+  /** Sign-in from the login screen or the rule-only bar: the error is shown there. */
+  async function signInHere(clientId: string | null, promptConsent: boolean) {
+    const r = await signIn(clientId, promptConsent);
+    if (r.started && r.error) {
+      dispatch({ type: "error", error: { message: describeError(r.error), cancelled: isSiwcError(r.error) && r.error.kind === "cancelled" } });
     }
   }
 
-  async function signOut() {
+  const signOut = useCallback(async (): Promise<unknown> => {
     try {
       await api.siwcSignOut(); // the siwc-changed event sets the notice and refreshes
+      return null;
     } catch (e) {
-      setError({ message: describeError(e), cancelled: false });
+      dispatch({ type: "error", error: { message: describeError(e), cancelled: false } });
       await refresh();
+      return e;
     }
-  }
+  }, [refresh]);
+
+  const switchAccount = useCallback(
+    async (clientId: string): Promise<unknown> => {
+      try {
+        await api.siwcSwitch(clientId); // the siwc-changed event refreshes
+        return null;
+      } catch (e) {
+        await refresh();
+        return e;
+      }
+    },
+    [refresh],
+  );
+
+  const cancelSignIn = useCallback(() => void api.siwcCancelSignIn(), []);
 
   const view = gateView(status, loadError);
 
@@ -91,9 +110,22 @@ export function LoginGate({ children }: { children: ReactNode }) {
 
   if (view.kind === "ready" || (view.kind === "plan_disabled" && continuesWithoutPlan)) {
     const account = view.account;
-    const enablePlan = () => void signIn(account.clientId, true);
+    const enablePlan = () => void signInHere(account.clientId, true);
+    const value: GateState = {
+      status,
+      planEnabled: view.kind === "ready",
+      ruleOnly: view.kind !== "ready",
+      statusVersion,
+      signingIn,
+      signIn,
+      cancelSignIn,
+      signOut,
+      switchAccount,
+      refreshStatus: refresh,
+      enablePlan,
+    };
     return (
-      <GateContext.Provider value={{ planEnabled: view.kind === "ready", ruleOnly: view.kind !== "ready", statusVersion, enablePlan }}>
+      <GateContext.Provider value={value}>
         <div className="gate-shell">
         {view.kind === "plan_disabled" && (
           <RuleOnlyBar
@@ -101,8 +133,8 @@ export function LoginGate({ children }: { children: ReactNode }) {
             signingIn={signingIn}
             error={error?.message ?? null}
             onEnable={enablePlan}
-            onCancel={() => void api.siwcCancelSignIn()}
-            onDismissError={() => setError(null)}
+            onCancel={cancelSignIn}
+            onDismissError={() => dispatch({ type: "error", error: null })}
           />
         )}
         {children}
@@ -118,21 +150,20 @@ export function LoginGate({ children }: { children: ReactNode }) {
       signingIn={signingIn}
       error={error}
       notice={notice}
-      onSignIn={(id, consent) => void signIn(id, consent)}
-      onCancelSignIn={() => void api.siwcCancelSignIn()}
+      onSignIn={(id, consent) => void signInHere(id, consent)}
+      onCancelSignIn={cancelSignIn}
       onReload={() => {
-        setLoadError(null);
-        setStatus(null);
+        dispatch({ type: "reload" });
         void refresh();
       }}
       onSignOut={() => void signOut()}
       onContinueWithoutPlan={(clientId) => {
         ruleOnlyChoice.set(clientId, true);
-        setError(null);
+        dispatch({ type: "error", error: null });
         setRuleOnly((r) => ({ ...r, [clientId]: true }));
       }}
-      onDismissNotice={() => setNotice(null)}
-      onOpenDoc={(url) => void api.openSiwcDoc(url).catch((e) => setError({ message: describeError(e), cancelled: false }))}
+      onDismissNotice={() => dispatch({ type: "dismissNotice" })}
+      onOpenDoc={(url) => void api.openSiwcDoc(url).catch((e) => dispatch({ type: "error", error: { message: describeError(e), cancelled: false } }))}
       onManageUsage={() => void api.openUsage()}
     />
   );

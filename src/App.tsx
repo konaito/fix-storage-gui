@@ -21,7 +21,7 @@ import { TrashStep } from "./components/steps/TrashStep";
 import { safePaths, summarize } from "./flow/progress";
 import { effectiveSort, type SortMode } from "./flow/order";
 import { canGo, flowReducer, initialFlow, type StepId } from "./flow/steps";
-import { api, isSiwcError, type EnvInfo, type Model, type ScanProgress, type SiwcStatus, type TrashOutcome, type TrashProgress } from "./lib/api";
+import { api, isSiwcError, type EnvInfo, type Model, type ScanProgress, type TrashOutcome, type TrashProgress } from "./lib/api";
 import { describeError } from "./lib/errors";
 import { formatBytes } from "./lib/format";
 import { forDisplay, toRow, withAi, type Row } from "./lib/rows";
@@ -34,11 +34,12 @@ const BATCH = 25;
 
 export default function App() {
   const [env, setEnv] = useState<EnvInfo | null>(null);
-  const [status, setStatus] = useState<SiwcStatus | null>(null);
+  // Sign-in state is owned by the login gate (#29, #30); the app only reads it.
+  const gate = useGate();
+  const { status, signingIn, refreshStatus } = gate;
   const [models, setModels] = useState<Model[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [model, setModel] = useState("");
-  const [signingIn, setSigningIn] = useState(false);
 
   const [flow, dispatch] = useReducer(flowReducer, initialFlow);
   const [barSlot, setBarSlot] = useState<HTMLDivElement | null>(null);
@@ -81,22 +82,9 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refreshStatus = useCallback(async () => {
-    try {
-      setStatus(await api.siwcStatus());
-    } catch (e) {
-      setError(describeError(e));
-    }
-  }, []);
-
   const active = status?.accounts.find((a) => a.clientId === status.active);
   const signedIn = !!active?.signedIn;
-  // AI judgement needs both this app's view of the account and the login gate's plan-use consent.
-  const gate = useGate();
   const planReady = gate.planEnabled && signedIn && !!active?.planEnabled;
-  useEffect(() => {
-    if (gate.statusVersion > 0) void refreshStatus();
-  }, [gate.statusVersion, refreshStatus]);
 
   // What every step shows and acts on: with plan usage, rows the AI has not judged are "未判定" and can't be selected (#12).
   const view = useMemo(() => rows.map((r) => forDisplay(r, planReady)), [rows, planReady]);
@@ -126,14 +114,13 @@ export default function App() {
 
   useEffect(() => {
     api.envInfo().then(setEnv).catch((e) => setError(describeError(e)));
-    void refreshStatus();
     const un1 = listen<ScanProgress>("scan-progress", (e) => setProgress(e.payload));
     const un2 = listen<TrashProgress>("trash-progress", (e) => setTrashProgress(e.payload));
     return () => {
       void un1.then((f) => f());
       void un2.then((f) => f());
     };
-  }, [refreshStatus]);
+  }, []);
 
   // Refresh the model list whenever the active account changes.
   useEffect(() => {
@@ -144,37 +131,32 @@ export default function App() {
   function handleAiError(e: unknown) {
     if (isSiwcError(e)) {
       if (e.kind === "usage_limit") setUsageLimit(true);
-      if (e.kind === "reauth_required" || e.kind === "plan_not_enabled") void refreshStatus();
+      // The gate also hears "reauth" from Rust (#29); reading status here covers plan_not_enabled.
+      if (e.kind === "reauth_required" || e.kind === "client_revoked" || e.kind === "plan_not_enabled") void refreshStatus();
     }
     setError(describeError(e));
   }
 
   async function signIn(clientId: string | null, promptConsent: boolean) {
+    if (flow.busy) return;
     setError(null);
-    setSigningIn(true);
-    try {
-      const acc = await api.siwcSignIn(clientId, promptConsent);
-      if (!acc.planEnabled) setNotice("サインインしました。ただし ChatGPT プランの利用は許可されていません。");
-    } catch (e) {
-      handleAiError(e);
-    } finally {
-      setSigningIn(false);
-      await refreshStatus();
-    }
+    const r = await gate.signIn(clientId, promptConsent);
+    if (!r.started) return;
+    if (r.error) handleAiError(r.error);
+    else if (r.account && !r.account.planEnabled) setNotice("サインインしました。ただし ChatGPT プランの利用は許可されていません。");
   }
 
+  // After a successful sign-out the gate shows the login screen with its own notice.
   async function signOut() {
-    try {
-      const r = await api.siwcSignOut();
-      setNotice(
-        r.remoteRevoked
-          ? "サインアウトしました。"
-          : "このMacのトークンは消しましたが、ChatGPT 側での接続解除を確認できませんでした。必要なら ChatGPT の設定からこのアプリの接続を解除してください。",
-      );
-    } catch (e) {
-      setError(describeError(e));
-    }
-    await refreshStatus();
+    if (flow.busy) return;
+    const e = await gate.signOut();
+    if (e) setError(describeError(e));
+  }
+
+  async function switchAccount(clientId: string) {
+    if (flow.busy) return;
+    const e = await gate.switchAccount(clientId);
+    if (e) setError(describeError(e));
   }
 
   async function runScan(t: Target, pushHistory: boolean) {
@@ -228,7 +210,9 @@ export default function App() {
 
   async function sendToAi(mask: boolean) {
     setAiDialog(false);
-    if (!env || !model || flow.busy || !planReady) return;
+    // Every batch of this run goes to the account it started with (#28).
+    const clientId = status?.active;
+    if (!env || !model || flow.busy || !planReady || !clientId) return;
     const maskOpts = { enabled: mask, home: env.home, user: env.user };
     const indexed = aiTargets.map((r, i) => ({ id: `i${i}`, row: r }));
     const batches = chunk(indexed, BATCH);
@@ -258,7 +242,7 @@ export default function App() {
         shouldStop: () => aiStop.current,
         send: (batch, _index, onChars) => {
           const payload = batch.map(({ id, row }) => toPayload(id, row, maskOpts));
-          return PROVIDER.judge(payload, { model, onProgress: onChars });
+          return PROVIDER.judge(payload, { model, clientId, onProgress: onChars });
         },
         onBatchComplete: (_index, judged, batch) => {
           const byId = new Map(judged.map((j) => [j.id, j]));
@@ -539,9 +523,10 @@ export default function App() {
             model={model}
             onModel={setModel}
             signingIn={signingIn}
+            locked={flow.busy === "ai" ? "AI 判定中" : flow.busy === "scan" ? "スキャン中" : flow.busy === "trash" ? "ゴミ箱へ移動中" : null}
             onSignIn={(id, consent) => void signIn(id, consent)}
-            onCancelSignIn={() => void api.siwcCancelSignIn()}
-            onSwitch={(id) => void api.siwcSwitch(id).then(refreshStatus)}
+            onCancelSignIn={gate.cancelSignIn}
+            onSwitch={(id) => void switchAccount(id)}
             onSignOut={() => void signOut()}
             onManageUsage={() => void api.openUsage()}
             onReloadModels={() => void loadModels()}

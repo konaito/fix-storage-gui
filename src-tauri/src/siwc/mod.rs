@@ -115,6 +115,17 @@ impl Siwc {
         self.store.save_accounts(&a).map_err(|e| SiwcError::new("storage", e))
     }
 
+    /// Makes this the only running sign-in: a sign-in still waiting is cancelled (it ends as
+    /// `cancelled` and frees its loopback port), and the returned turn owns the cancel switch.
+    /// Dropping the turn, on any path out of `sign_in`, clears the switch if it is still this one (#30).
+    fn begin_sign_in(&self) -> SignInTurn<'_> {
+        let flag = Arc::new(AtomicBool::new(false));
+        if let Some(previous) = self.sign_in_cancel.lock().unwrap().replace(flag.clone()) {
+            previous.store(true, Ordering::Relaxed);
+        }
+        SignInTurn { slot: &self.sign_in_cancel, flag }
+    }
+
     pub fn cancel_sign_in(&self) {
         if let Some(flag) = self.sign_in_cancel.lock().unwrap().as_ref() {
             flag.store(true, Ordering::Relaxed);
@@ -133,6 +144,7 @@ impl Siwc {
     /// Runs the whole browser sign-in. `client_id = None` registers a new client
     /// (`dynamic_agent_client`); otherwise reauthorises that saved registration.
     pub async fn sign_in(&self, client_id: Option<String>, prompt_consent: bool, open_browser: impl FnOnce(&str) -> Result<(), String>) -> Result<AccountView, SiwcError> {
+        let turn = self.begin_sign_in();
         let host_id = self.store.host_id().map_err(|e| SiwcError::new("storage", e))?;
         let accounts = self.accounts()?;
         let existing = client_id.as_ref().and_then(|id| accounts.accounts.iter().find(|m| &m.client_id == id).cloned());
@@ -158,16 +170,17 @@ impl Siwc {
             prompt_consent,
         });
 
-        let cancel = Arc::new(AtomicBool::new(false));
-        *self.sign_in_cancel.lock().unwrap() = Some(cancel.clone());
+        let cancel = turn.flag.clone();
         // Listener is already bound, so it is safe to open the browser now.
         open_browser(&url).map_err(|e| SiwcError::new("browser", format!("ブラウザを開けません: {e}")))?;
-        let params = tokio::task::spawn_blocking(move || oauth::wait_for_callback(listener, cancel, Duration::from_secs(600)))
+        let expected_state = state.clone();
+        let params = tokio::task::spawn_blocking(move || oauth::wait_for_callback(listener, cancel, Duration::from_secs(600), &expected_state))
             .await
             .map_err(|e| SiwcError::new("callback_failed", e.to_string()))??;
-        *self.sign_in_cancel.lock().unwrap() = None;
+        // The browser part is over; "cancel" no longer applies to this sign-in.
+        drop(turn);
 
-        // 1. state first, then OAuth errors.
+        // 1. state first (wait_for_callback only returns a matching one; checked again here), then OAuth errors.
         if params.get("state").map(String::as_str) != Some(state.as_str()) {
             return Err(SiwcError::new("state_mismatch", "サインインの応答が一致しません。もう一度試してください"));
         }
@@ -293,6 +306,16 @@ impl Siwc {
         }
     }
 
+    /// The token endpoint no longer knows this registration (`invalid_client` on refresh, #29).
+    /// Its tokens are deleted and it is removed from `accounts.json`, so the next sign-in registers
+    /// a new client instead of reauthorising one that can't work.
+    fn forget_registration(&self, client_id: &str) {
+        let _ = self.store.clear_credentials(client_id);
+        let Ok(mut a) = self.accounts() else { return };
+        remove_registration(&mut a, client_id);
+        let _ = self.store.save_accounts(&a);
+    }
+
     fn mark_reauth(&self, client_id: &str) {
         let _ = self.store.clear_credentials(client_id);
         // An unreadable accounts.json is left alone (not replaced by an empty list).
@@ -304,12 +327,13 @@ impl Siwc {
     }
 
     /// Returns a usable access token for the active account, refreshing near expiry.
-    /// Refreshes are serialised (`refresh_lock`) so a rotating refresh token is never used twice.
-    /// If `stale_access_token` is `Some`, refresh only when the stored token is still that
-    /// value — a concurrent 401 retry may already have refreshed it.
-    async fn access_token(&self, stale_access_token: Option<&str>) -> Result<(String, String), SiwcError> {
+    /// `pinned` is the account an AI run started with (#28): if it is no longer the active one,
+    /// nothing is sent. Refreshes are serialised (`refresh_lock`) so a rotating refresh token is
+    /// never used twice. If `stale_access_token` is `Some`, refresh only when the stored token is
+    /// still that value — a concurrent 401 retry may already have refreshed it.
+    async fn access_token(&self, pinned: Option<&str>, stale_access_token: Option<&str>) -> Result<(String, String), SiwcError> {
         let a = self.accounts()?;
-        let client_id = a.active.clone().ok_or_else(|| SiwcError::new("signed_out", "ChatGPT にサインインしていません"))?;
+        let client_id = request_client(a.active.as_deref(), pinned)?;
         let meta = a.accounts.iter().find(|m| m.client_id == client_id).cloned().ok_or_else(|| SiwcError::new("signed_out", "ChatGPT にサインインしていません"))?;
         let _guard = self.refresh_lock.lock().await;
         let creds = self.store.load_credentials(&client_id).ok_or_else(|| SiwcError::new("reauth_required", "もう一度サインインしてください"))?;
@@ -350,20 +374,26 @@ impl Siwc {
                 self.store.save_credentials(&client_id, &new).map_err(|e| SiwcError::new("storage", e))?;
                 Ok((client_id, t.access_token))
             }
-            Err(e) if e.kind == "reauth_required" => {
-                self.mark_reauth(&client_id);
-                Err(e)
-            }
-            // Temporary failure: keep credentials.
-            Err(e) => Err(e),
+            Err(e) => match refresh_failure(&e.kind) {
+                RefreshFailure::Reauth => {
+                    self.mark_reauth(&client_id);
+                    Err(e)
+                }
+                RefreshFailure::Forget => {
+                    self.forget_registration(&client_id);
+                    Err(SiwcError { kind: "client_revoked".into(), ..e })
+                }
+                // Temporary failure: keep credentials.
+                RefreshFailure::Keep => Err(e),
+            },
         }
     }
 
     pub async fn models(&self) -> Result<Vec<api::Model>, SiwcError> {
-        let (_, token) = self.access_token(None).await?;
+        let (_, token) = self.access_token(None, None).await?;
         match api::list_models(&self.http, &token).await {
             Err(e) if e.status == Some(401) => {
-                let (_, token) = self.access_token(Some(&token)).await?;
+                let (_, token) = self.access_token(None, Some(&token)).await?;
                 api::list_models(&self.http, &token).await
             }
             other => other,
@@ -372,13 +402,14 @@ impl Siwc {
 
     /// Streams one Responses API request. Concurrent calls are supported: each has its own
     /// HTTP stream, and `siwc_respond` does not take a global lock around inference.
-    /// Token refresh is single-flight (see `access_token`).
-    pub async fn respond(&self, model: &str, instructions: &str, input: &str, on_delta: impl FnMut(usize) + Clone) -> Result<String, SiwcError> {
-        let (_, token) = self.access_token(None).await?;
+    /// Token refresh is single-flight (see `access_token`). `client_id` is the account the AI run
+    /// started with; it is required so a request can't silently use another account (#28).
+    pub async fn respond(&self, client_id: &str, model: &str, instructions: &str, input: &str, on_delta: impl FnMut(usize) + Clone) -> Result<String, SiwcError> {
+        let (_, token) = self.access_token(Some(client_id), None).await?;
         match api::respond(&self.http, &token, model, instructions, input, on_delta.clone()).await {
             // Retry once with a fresh token; a terminal refresh error turns into reauth_required.
             Err(e) if e.status == Some(401) => {
-                let (_, token) = self.access_token(Some(&token)).await?;
+                let (_, token) = self.access_token(Some(client_id), Some(&token)).await?;
                 api::respond(&self.http, &token, model, instructions, input, on_delta).await
             }
             other => other,
@@ -408,6 +439,64 @@ impl Siwc {
             Some(e) => Err(e),
             None => Ok(SignOutResult { remote_revoked }),
         }
+    }
+}
+
+/// Clears the cancel switch of a sign-in when it ends, unless a newer sign-in has replaced it.
+struct SignInTurn<'a> {
+    slot: &'a std::sync::Mutex<Option<Arc<AtomicBool>>>,
+    flag: Arc<AtomicBool>,
+}
+
+impl Drop for SignInTurn<'_> {
+    fn drop(&mut self) {
+        let mut slot = self.slot.lock().unwrap();
+        if slot.as_ref().is_some_and(|f| Arc::ptr_eq(f, &self.flag)) {
+            *slot = None;
+        }
+    }
+}
+
+/// The account a request is sent with. Without `pinned` (model list) it is the active one.
+/// With `pinned` (an AI run, #28) it must still be the active one: after a switch or a sign-out
+/// the remaining batches stop instead of going to another account.
+pub(crate) fn request_client(active: Option<&str>, pinned: Option<&str>) -> Result<String, SiwcError> {
+    let active = active.ok_or_else(|| SiwcError::new("signed_out", "ChatGPT にサインインしていません"))?;
+    match pinned {
+        Some(p) if p != active => Err(SiwcError::new("account_changed", "AI 判定の途中でアカウントが切り替わったため、残りは送りませんでした")),
+        _ => Ok(active.to_string()),
+    }
+}
+
+/// What a failed refresh means for the saved registration.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RefreshFailure {
+    /// The refresh token is dead: delete it and ask to sign in again with the same registration.
+    Reauth,
+    /// The registration itself is gone (`invalid_client`, #29): forget it so a new one is made.
+    Forget,
+    /// Temporary (network, 5xx…): keep everything.
+    Keep,
+}
+
+pub(crate) fn refresh_failure(kind: &str) -> RefreshFailure {
+    match kind {
+        "reauth_required" => RefreshFailure::Reauth,
+        "invalid_client" => RefreshFailure::Forget,
+        _ => RefreshFailure::Keep,
+    }
+}
+
+/// Errors after which the stored sign-in state has changed, so the login gate must read it again
+/// (`siwc-changed` with reason "reauth", #29).
+pub fn changes_sign_in(kind: &str) -> bool {
+    matches!(kind, "reauth_required" | "client_revoked")
+}
+
+pub(crate) fn remove_registration(a: &mut store::AccountsFile, client_id: &str) {
+    a.accounts.retain(|m| m.client_id != client_id);
+    if a.active.as_deref() == Some(client_id) {
+        a.active = None;
     }
 }
 
@@ -570,6 +659,99 @@ mod tests {
         let a = store::AccountsFile { active: None, accounts: vec![meta("oaiapp_a", "u")], welcome_shown: true };
         assert_eq!(sign_out_targets(&a), vec!["oaiapp_a".to_string()]);
         assert!(sign_out_targets(&store::AccountsFile::default()).is_empty());
+    }
+
+    #[test]
+    fn requests_stay_on_the_account_the_run_started_with() {
+        assert_eq!(request_client(Some("oaiapp_a"), Some("oaiapp_a")).unwrap(), "oaiapp_a");
+        assert_eq!(request_client(Some("oaiapp_b"), Some("oaiapp_a")).unwrap_err().kind, "account_changed");
+        assert_eq!(request_client(None, Some("oaiapp_a")).unwrap_err().kind, "signed_out");
+        // Model list: whatever is active.
+        assert_eq!(request_client(Some("oaiapp_b"), None).unwrap(), "oaiapp_b");
+        assert_eq!(request_client(None, None).unwrap_err().kind, "signed_out");
+    }
+
+    #[test]
+    fn refresh_failures() {
+        assert_eq!(refresh_failure("reauth_required"), RefreshFailure::Reauth);
+        assert_eq!(refresh_failure("invalid_client"), RefreshFailure::Forget);
+        assert_eq!(refresh_failure("network"), RefreshFailure::Keep);
+        assert_eq!(refresh_failure("token_failed"), RefreshFailure::Keep);
+        assert!(changes_sign_in("reauth_required"));
+        assert!(changes_sign_in("client_revoked"));
+        assert!(!changes_sign_in("network"));
+        assert!(!changes_sign_in("usage_limit"));
+    }
+
+    #[test]
+    fn removed_registration_is_no_longer_active() {
+        let mut a = store::AccountsFile { active: Some("oaiapp_a".into()), accounts: vec![meta("oaiapp_a", "u"), meta("oaiapp_b", "v")], welcome_shown: true };
+        remove_registration(&mut a, "oaiapp_a");
+        assert_eq!(a.active, None);
+        assert_eq!(a.accounts.iter().map(|m| m.client_id.as_str()).collect::<Vec<_>>(), vec!["oaiapp_b"]);
+        let mut a = store::AccountsFile { active: Some("oaiapp_b".into()), accounts: vec![meta("oaiapp_a", "u"), meta("oaiapp_b", "v")], welcome_shown: true };
+        remove_registration(&mut a, "oaiapp_a");
+        assert_eq!(a.active.as_deref(), Some("oaiapp_b"));
+    }
+
+    fn temp_siwc() -> Arc<Siwc> {
+        let dir = std::env::temp_dir().join(format!("fsg-siwc-test-{}", oauth::random_value()));
+        std::fs::create_dir_all(&dir).unwrap();
+        Arc::new(Siwc::new(dir))
+    }
+
+    fn running_flag(s: &Siwc) -> Option<Arc<AtomicBool>> {
+        s.sign_in_cancel.lock().unwrap().clone()
+    }
+
+    /// A sign-in that fails before the callback (here: the browser can't be opened) must not leave
+    /// its cancel switch behind (#30). Uses no keychain and no network.
+    #[tokio::test]
+    async fn failed_sign_in_clears_its_cancel_switch() {
+        let s = temp_siwc();
+        let e = s.sign_in(None, false, |_| Err("no browser".into())).await.unwrap_err();
+        assert_eq!(e.kind, "browser");
+        assert!(running_flag(&s).is_none());
+    }
+
+    /// Starting a second sign-in ends the first one, so it doesn't hold the loopback port for 600 s,
+    /// and the cancel button stops the one still running (#30). Uses no keychain and no network.
+    #[tokio::test]
+    async fn second_sign_in_cancels_the_first() {
+        let s = temp_siwc();
+        let s1 = s.clone();
+        let first = tokio::spawn(async move { s1.sign_in(None, false, |_| Ok(())).await });
+        let first_flag = loop {
+            if let Some(f) = running_flag(&s) {
+                break f;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        let s2 = s.clone();
+        let second = tokio::spawn(async move { s2.sign_in(None, false, |_| Ok(())).await });
+        let first_result = tokio::time::timeout(Duration::from_secs(3), first).await;
+        // Wait for the second to be the running one, then press "cancel" once.
+        let mut second_running = false;
+        for _ in 0..300 {
+            if running_flag(&s).is_some_and(|f| !Arc::ptr_eq(&f, &first_flag)) {
+                second_running = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        s.cancel_sign_in();
+        let second_result = tokio::time::timeout(Duration::from_secs(3), second).await;
+        // Never leave a listener waiting for 600 s, whatever happened above.
+        first_flag.store(true, Ordering::Relaxed);
+        if let Some(f) = running_flag(&s) {
+            f.store(true, Ordering::Relaxed);
+        }
+        let first_err = first_result.expect("first sign-in is still waiting").unwrap().unwrap_err();
+        assert_eq!(first_err.kind, "cancelled");
+        assert!(second_running, "second sign-in never became the running one");
+        let second_err = second_result.expect("cancel did not stop the second sign-in").unwrap().unwrap_err();
+        assert_eq!(second_err.kind, "cancelled");
+        assert!(running_flag(&s).is_none());
     }
 
     #[test]

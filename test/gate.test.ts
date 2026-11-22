@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AccountView, SiwcStatus } from "../src/lib/api";
-import { gateView, primarySignInTarget, SIWC_DOCS } from "../src/lib/gate";
+import { gateReducer, gateView, initialGate, primarySignInTarget, REAUTH_NOTICE, SIGNED_OUT_NOTICE, singleFlight, SIWC_DOCS } from "../src/lib/gate";
 
 const acc = (o: Partial<AccountView> = {}): AccountView => ({
   clientId: "oaiapp_1",
@@ -84,5 +84,73 @@ describe("main sign-in button target", () => {
   it("registers a new client when there is nothing saved or the choice is ambiguous", () => {
     expect(primarySignInTarget(null, [])).toBeNull();
     expect(primarySignInTarget(null, [acc(), acc({ clientId: "oaiapp_2" })])).toBeNull();
+  });
+});
+
+describe("gate state (#29, #30)", () => {
+  const ready = gateReducer(initialGate, { type: "loaded", status: st([acc()]) });
+
+  it("goes back to the login screen when a token stops working during use", () => {
+    expect(gateView(ready.status, ready.loadError).kind).toBe("ready");
+    // Rust: refresh refused -> mark_reauth -> siwc-changed "reauth"; the gate then reads status again.
+    let s = gateReducer(ready, { type: "changed", event: { reason: "reauth", remoteRevoked: null } });
+    expect(s.statusVersion).toBe(1);
+    expect(s.notice).toBe(REAUTH_NOTICE);
+    s = gateReducer(s, { type: "loaded", status: st([acc({ signedIn: false, needsReauth: true })]) });
+    const v = gateView(s.status, s.loadError);
+    expect(v.kind).toBe("signed_out");
+    expect(v.kind === "signed_out" && v.reauth?.clientId).toBe("oaiapp_1");
+  });
+
+  it("asks for a new sign-in when the registration is gone (invalid_client)", () => {
+    // Rust removes the registration and clears the active account.
+    const s = gateReducer(ready, { type: "loaded", status: st([], null) });
+    const v = gateView(s.status, s.loadError);
+    expect(v).toEqual({ kind: "signed_out", reauth: null });
+    expect(primarySignInTarget(null, s.status?.accounts ?? [])).toBeNull();
+  });
+
+  it("does not replace the sign-out notice with the reauth one", () => {
+    let s = gateReducer(ready, { type: "changed", event: { reason: "signed_out", remoteRevoked: true } });
+    s = gateReducer(s, { type: "changed", event: { reason: "reauth", remoteRevoked: null } });
+    expect(s.notice).toBe(SIGNED_OUT_NOTICE);
+  });
+
+  it("keeps one signingIn flag that clears on success, failure or cancel", () => {
+    let s = gateReducer(ready, { type: "signInStart" });
+    expect(s.signingIn).toBe(true);
+    s = gateReducer(s, { type: "signInEnd" });
+    s = gateReducer(s, { type: "error", error: { message: "x", cancelled: true } });
+    expect(s.signingIn).toBe(false);
+    expect(s.error?.cancelled).toBe(true);
+  });
+});
+
+describe("one sign-in at a time (#30)", () => {
+  it("does not start a second sign-in while one is running, and allows one after it ends", async () => {
+    let finish: (v: string) => void = () => {};
+    let calls = 0;
+    const run = singleFlight(
+      () =>
+        new Promise<string>((resolve) => {
+          calls++;
+          finish = resolve;
+        }),
+    );
+    const first = run();
+    expect(await run()).toEqual({ started: false });
+    finish("a");
+    expect(await first).toEqual({ started: true, value: "a" });
+    const third = run();
+    expect(calls).toBe(2);
+    finish("b");
+    await third;
+  });
+  it("is released when the sign-in fails", async () => {
+    const run = singleFlight(async () => {
+      throw new Error("cancelled");
+    });
+    await expect(run()).rejects.toThrow("cancelled");
+    await expect(run()).rejects.toThrow("cancelled");
   });
 });
