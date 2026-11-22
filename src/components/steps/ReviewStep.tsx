@@ -1,11 +1,16 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { sortRows, type SortMode } from "../../flow/order";
 import { applyFilter, summarize, type Filter } from "../../flow/progress";
 import { api } from "../../lib/api";
 import { agoJa, formatBytes, isoDate } from "../../lib/format";
 import { AI_VERDICT_JA, CATEGORY_JA, CLI_VERDICT_JA } from "../../lib/labels";
 import type { Row } from "../../lib/rows";
 import { selectable } from "../../safety/merge";
+import { InfoPanel } from "../review/InfoPanel";
+import { Treemap } from "../review/Treemap";
 import type { Target } from "./TargetStep";
+
+export type ReviewView = "map" | "list";
 
 interface Props {
   rows: Row[];
@@ -26,20 +31,24 @@ interface Props {
   aiTargets: number;
   onGoAi: () => void;
   onGoTrash: () => void;
+  home: string | null;
+  view: ReviewView;
+  onView: (v: ReviewView) => void;
+  /** Effective order: size before AI, recommended (safe first) after, unless the user picked one. */
+  sort: SortMode;
+  onSort: (m: SortMode) => void;
 }
-
-const FILTERS: { id: Filter; label: string }[] = [
-  { id: "all", label: "すべて" },
-  { id: "safe", label: AI_VERDICT_JA.safe },
-  { id: "caution", label: AI_VERDICT_JA.caution },
-  { id: "keep", label: AI_VERDICT_JA.keep },
-  { id: "locked", label: "保護（選べません）" },
-];
 
 export function ReviewStep(p: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const sum = useMemo(() => summarize(p.rows), [p.rows]);
-  const shown = useMemo(() => applyFilter(p.rows, filter), [p.rows, filter]);
+  const shown = useMemo(() => sortRows(applyFilter(p.rows, filter), p.sort), [p.rows, filter, p.sort]);
+  const [focus, setFocus] = useState<string | null>(null);
+  // Keep the detail panel on something visible: default to the first tile (top-left).
+  useEffect(() => {
+    if (!focus || !shown.some((r) => r.path === focus)) setFocus(shown[0]?.path ?? null);
+  }, [shown, focus]);
+  const focused = shown.find((r) => r.path === focus) ?? null;
   const chosen = p.rows.filter((r) => p.selected.has(r.path) && selectable(r.final));
   const chosenSize = chosen.reduce((s, r) => s + r.size, 0);
   const shownSelectable = shown.filter((r) => selectable(r.final));
@@ -85,7 +94,7 @@ export function ReviewStep(p: Props) {
         </div>
       ) : (
         <>
-          <div className="stats">
+          <div className="stats tight">
             <button type="button" className={`stat ${filter === "all" ? "on" : ""}`} onClick={() => setFilter("all")}>
               <span className="stat-label">見つかった項目</span>
               <span className="stat-value">{sum.all.count} 件</span>
@@ -101,12 +110,28 @@ export function ReviewStep(p: Props) {
           </div>
 
           <div className="toolbar row space">
-            <div className="segmented small" role="tablist" aria-label="絞り込み">
-              {FILTERS.map((f) => (
-                <button key={f.id} type="button" role="tab" aria-selected={filter === f.id} className={filter === f.id ? "on" : ""} onClick={() => setFilter(f.id)}>
-                  {f.label}
+            <div className="row">
+              <div className="segmented small" role="radiogroup" aria-label="表示">
+                <button type="button" role="radio" aria-checked={p.view === "map"} className={p.view === "map" ? "on" : ""} onClick={() => p.onView("map")}>
+                  ▦ マップ
                 </button>
-              ))}
+                <button type="button" role="radio" aria-checked={p.view === "list"} className={p.view === "list" ? "on" : ""} onClick={() => p.onView("list")}>
+                  ☰ リスト
+                </button>
+              </div>
+              <div className="segmented small" role="radiogroup" aria-label="並べ方">
+                <button type="button" role="radio" aria-checked={p.sort === "recommended"} className={p.sort === "recommended" ? "on" : ""} onClick={() => p.onSort("recommended")} title="削除していい → 注意 → 消しちゃダメ・保護 の順。グループの中はサイズ順">
+                  おすすめ順
+                </button>
+                <button type="button" role="radio" aria-checked={p.sort === "size"} className={p.sort === "size" ? "on" : ""} onClick={() => p.onSort("size")}>
+                  サイズ順
+                </button>
+              </div>
+              {filter !== "all" && (
+                <button type="button" className="link small" onClick={() => setFilter("all")}>
+                  絞り込みを解除
+                </button>
+              )}
             </div>
             <div className="row">
               <button type="button" onClick={p.onSelectAllSafe} disabled={sum.safe.count === 0}>
@@ -122,6 +147,19 @@ export function ReviewStep(p: Props) {
           {shown.length === 0 ? (
             <div className="empty small-empty">
               <p className="muted">この絞り込みに当てはまる項目はありません。</p>
+            </div>
+          ) : p.view === "map" ? (
+            <div className="map-layout">
+              <Treemap
+                rows={shown}
+                mode={p.sort}
+                focus={focus}
+                selected={p.selected}
+                onFocus={setFocus}
+                onToggle={p.onToggle}
+                onDrill={p.onDrill}
+              />
+              <InfoPanel row={focused} home={p.home} selected={!!focused && p.selected.has(focused.path)} onToggle={p.onToggle} onDrill={p.onDrill} />
             </div>
           ) : (
             <div className="table-wrap">
