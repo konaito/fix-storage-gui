@@ -6,7 +6,7 @@
 use crate::roots::{category_of, mac_roots, CategoryId, Root};
 use crate::safety::cannot_remove;
 use serde::Serialize;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::fs::MetadataExt;
@@ -29,8 +29,8 @@ pub struct ScanItem {
     pub last_used_ms: Option<f64>,
     /// Why this item can never be moved to the Trash (hard block), if so.
     pub blocked: Option<String>,
-    /// Holds a regular file with more than one hard link (#34). Its blocks may also belong to
-    /// paths outside this item, so moving it to the Trash can free less than `size`.
+    /// Holds a regular file that is also hard-linked from a path outside this item (#34, #79).
+    /// Its blocks stay in use there, so moving this item to the Trash can free less than `size`.
     pub shared: bool,
 }
 
@@ -156,41 +156,51 @@ fn du(path: &str, cancel: &AtomicBool) -> DuResult {
     DuResult { bytes: kb * 1024, denied: stalled || stderr_denied }
 }
 
-/// Most entries `has_hard_links` reads in one folder before it gives up (#34).
-const HARD_LINK_SCAN_CAP: usize = 20_000;
+/// Most entries `has_outside_hard_links` reads in one folder before it stops (#34, #79).
+const HARD_LINK_SCAN_CAP: usize = 50_000;
 
 /// A loose file whose blocks are shared with another path (more than one hard link).
 fn is_hard_linked(meta: &fs::Metadata) -> bool {
     meta.is_file() && meta.nlink() > 1
 }
 
-/// Whether a folder holds a hard-linked file (#34). du counts such a file in full for every
-/// folder that links it, so moving one of them to the Trash can free less than its size.
-/// Walks like `du -x` (no symlinks, stays on the folder's volume) and stops at the first hit.
-/// After `cap` entries or on cancel it gives up and answers false.
-fn has_hard_links(path: &str, cap: usize, cancel: &AtomicBool) -> bool {
+/// Whether a folder holds a file that is also hard-linked from outside it (#34, #79). du counts
+/// such a file in full for every folder that links it, so moving one of them to the Trash can
+/// free less than its size. Links that all sit inside the folder (cargo's `target` makes many)
+/// are counted once by du and free their size in full, so they do not count here.
+/// Walks like `du -x` (no symlinks, stays on the folder's volume) and counts how many links to
+/// each hard-linked file it finds; a file found fewer times than its `nlink` has a link outside.
+/// At `cap` entries it stops and answers from what it has seen, which leans towards true.
+/// On cancel it answers false.
+fn has_outside_hard_links(path: &str, cap: usize, cancel: &AtomicBool) -> bool {
     let Ok(top) = fs::symlink_metadata(path) else { return false };
     let dev = top.dev();
     let mut stack = vec![std::path::PathBuf::from(path)];
     let mut seen = 0usize;
+    // (dev, ino) -> (links found in this folder, nlink)
+    let mut links: HashMap<(u64, u64), (u64, u64)> = HashMap::new();
+    let outside = |links: &HashMap<(u64, u64), (u64, u64)>| links.values().any(|(found, nlink)| found < nlink);
     while let Some(dir) = stack.pop() {
         let Ok(entries) = fs::read_dir(&dir) else { continue };
         for entry in entries.flatten() {
-            seen += 1;
-            if seen > cap || cancel.load(Ordering::Relaxed) {
+            if cancel.load(Ordering::Relaxed) {
                 return false;
+            }
+            seen += 1;
+            if seen > cap {
+                return outside(&links);
             }
             // DirEntry::metadata does not follow symlinks.
             let Ok(meta) = entry.metadata() else { continue };
             if is_hard_linked(&meta) {
-                return true;
+                links.entry((meta.dev(), meta.ino())).or_insert((0, meta.nlink())).0 += 1;
             }
             if meta.is_dir() && meta.dev() == dev {
                 stack.push(entry.path());
             }
         }
     }
-    false
+    outside(&links)
 }
 
 fn mtime_ms(meta: &fs::Metadata) -> Option<f64> {
@@ -380,7 +390,7 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
                         denied_m.lock().unwrap().push(path.clone());
                     }
                     // Not after a denied or stalled du: the walk could not be killed if it hung on a privacy prompt.
-                    let shared = !r.denied && !cancel.load(Ordering::Relaxed) && has_hard_links(&path, HARD_LINK_SCAN_CAP, &cancel);
+                    let shared = !r.denied && !cancel.load(Ordering::Relaxed) && has_outside_hard_links(&path, HARD_LINK_SCAN_CAP, &cancel);
                     measured.lock().unwrap().push((path, r.bytes, true, shared));
                 }
             }
@@ -567,19 +577,61 @@ mod tests {
         }
     }
 
-    /// #34: the walk gives up after `cap` entries and stops on cancel, answering false.
+    /// #79: links that all sit inside one item (like cargo's `target`) free their size in full,
+    /// so that item is not marked; an item with a link to a path outside it is.
+    #[test]
+    fn links_only_inside_an_item_are_not_shared() {
+        let dir = temp_dir("hardlinks-inside");
+        for d in ["inside/sub", "out1", "out2", "mixed"] {
+            fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        fs::write(dir.join("inside/a.bin"), vec![6u8; 1_000_000]).unwrap();
+        fs::hard_link(dir.join("inside/a.bin"), dir.join("inside/b.bin")).unwrap();
+        fs::hard_link(dir.join("inside/a.bin"), dir.join("inside/sub/c.bin")).unwrap();
+        fs::write(dir.join("out1/x.bin"), vec![7u8; 1_000_000]).unwrap();
+        fs::hard_link(dir.join("out1/x.bin"), dir.join("out2/x.bin")).unwrap();
+        fs::write(dir.join("mixed/p.bin"), vec![8u8; 1_000_000]).unwrap();
+        fs::hard_link(dir.join("mixed/p.bin"), dir.join("mixed/q.bin")).unwrap();
+        fs::write(dir.join("mixed/r.bin"), vec![9u8; 1_000_000]).unwrap();
+        fs::hard_link(dir.join("mixed/r.bin"), dir.join("out2/r.bin")).unwrap();
+        let res = run_scan(
+            ScanOptions { home: "/nonexistent-home".into(), folder: Some(dir.to_string_lossy().into()), min_size: 0, limit: 100 },
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        let shared = |name: &str| res.items.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("{name} missing")).shared;
+        assert!(!shared("inside"), "inside links only to itself but is marked shared");
+        for name in ["out1", "out2", "mixed"] {
+            assert!(shared(name), "{name} links to a path outside it but is not marked shared");
+        }
+    }
+
+    /// #34, #79: the walk stops after `cap` entries and answers from what it has seen, so a link
+    /// whose twin it has not reached yet counts as outside. On cancel it answers false.
     #[test]
     fn hard_link_walk_is_capped() {
         let dir = temp_dir("hardlink-cap");
-        fs::write(dir.join("a.bin"), b"a").unwrap();
-        fs::hard_link(dir.join("a.bin"), dir.join("b.bin")).unwrap();
-        let path = dir.to_string_lossy().to_string();
-        let found = has_hard_links(&path, 100, &AtomicBool::new(false));
-        let capped = has_hard_links(&path, 0, &AtomicBool::new(false));
-        let cancelled = has_hard_links(&path, 100, &AtomicBool::new(true));
+        for d in ["item", "inside"] {
+            fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        fs::write(dir.join("item/a.bin"), b"a").unwrap();
+        fs::hard_link(dir.join("item/a.bin"), dir.join("b.bin")).unwrap();
+        fs::write(dir.join("inside/p.bin"), b"p").unwrap();
+        fs::hard_link(dir.join("inside/p.bin"), dir.join("inside/q.bin")).unwrap();
+        let item = dir.join("item").to_string_lossy().to_string();
+        let inside = dir.join("inside").to_string_lossy().to_string();
+        let found = has_outside_hard_links(&item, 100, &AtomicBool::new(false));
+        let capped = has_outside_hard_links(&item, 0, &AtomicBool::new(false));
+        let cancelled = has_outside_hard_links(&item, 100, &AtomicBool::new(true));
+        let inside_full = has_outside_hard_links(&inside, 100, &AtomicBool::new(false));
+        let inside_half = has_outside_hard_links(&inside, 1, &AtomicBool::new(false));
         let _ = fs::remove_dir_all(&dir);
         assert!(found);
         assert!(!capped);
         assert!(!cancelled);
+        assert!(!inside_full);
+        assert!(inside_half, "stopped after one of two inside links, so the other may be outside");
     }
 }
