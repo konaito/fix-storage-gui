@@ -3,6 +3,8 @@
 Mac のストレージを圧迫している重いファイル・フォルダを見つけて、安全に「ゴミ箱へ移動」するための GUI アプリです（Tauri v2）。**macOS 専用**です（Apple Silicon / Intel 両対応の universal ビルド）。Windows・Linux には対応していません。
 AI 判定は **Sign in with ChatGPT** を使い、あなたの ChatGPT プランの使用量で動きます（API キー不要）。
 
+紹介ページ（GitHub Pages）: https://konaito.github.io/fix-storage-gui/
+
 > **派生元:** このアプリは [govijr/fix-storage](https://github.com/govijr/fix-storage)（MIT License, Copyright (c) 2026 the fix-storage authors）をもとにしています。
 > 元はターミナル用の CLI（TypeScript + Ink）で、このリポジトリはそのコアロジックを GUI 向けに再利用・移植したものです。
 > 元の著作権表示は [LICENSE](./LICENSE) に残しています。fix-storage 本家とは無関係の非公式プロジェクトです。
