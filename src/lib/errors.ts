@@ -16,6 +16,8 @@ export function describeError(e: unknown): string {
     not_authorized: "許可された範囲ではこの操作はできません。",
     reauth_required: "サインインの有効期限が切れたか、ChatGPT 側で接続が解除されました。もう一度サインインしてください。",
     signed_out: "ChatGPT にサインインしていません。",
+    client_revoked: "このアプリの登録が ChatGPT 側で使えなくなりました。もう一度サインインすると、新しく登録し直します。",
+    account_changed: "AI 判定の途中でアカウントが切り替わったため、残りは送りませんでした。",
     unauthorized: "認証が受け付けられませんでした。選択中のアカウントと許可内容を確認してください。",
     forbidden: "ポリシーや地域などの制限で利用できませんでした。",
     unavailable: "現在利用できません。少し待ってからもう一度試してください。",
@@ -35,4 +37,9 @@ export function describeError(e: unknown): string {
     .join(" / ");
   if (diag) parts.push(`[${diag}]`);
   return parts.join(" ");
+}
+
+/** Message for the error band when "Finder で表示" fails (#63). The Rust side returns only the reason. */
+export function revealFailedJa(e: unknown): string {
+  return `Finder で表示できませんでした: ${describeError(e)}`;
 }

@@ -137,8 +137,31 @@ pub fn parse_callback_request(first_line: &str) -> Option<HashMap<String, String
     Some(u.query_pairs().into_owned().collect())
 }
 
-/// Waits (blocking) for the browser to hit the callback. Ignores other paths such as /favicon.ico.
-pub fn wait_for_callback(listener: TcpListener, cancel: Arc<AtomicBool>, timeout: Duration) -> Result<HashMap<String, String>, SiwcError> {
+/// What one request to the loopback listener is.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CallbackRequest {
+    /// Another path (e.g. /favicon.ico): 404, keep waiting.
+    Other,
+    /// The callback path, but not with this sign-in's `state` (an old tab, an `<img>` on any page):
+    /// 400, keep waiting (#30).
+    WrongState,
+    /// This sign-in's callback.
+    Done(HashMap<String, String>),
+}
+
+pub fn classify_callback(first_line: &str, expected_state: &str) -> CallbackRequest {
+    match parse_callback_request(first_line) {
+        None => CallbackRequest::Other,
+        Some(q) if q.get("state").map(String::as_str) == Some(expected_state) => CallbackRequest::Done(q),
+        Some(_) => CallbackRequest::WrongState,
+    }
+}
+
+const WRONG_STATE_HTML: &str = "<!doctype html><html lang=\"ja\"><meta charset=\"utf-8\"><title>Fix Storage GUI</title><body style=\"font-family:-apple-system,sans-serif;padding:40px\"><h2>このサインインの応答ではありません</h2><p>Fix Storage GUI で始めたサインインのタブから続けてください。</p></body></html>";
+
+/// Waits (blocking) for the browser to hit the callback with `expected_state`.
+/// Other paths get 404 and callbacks with another state get 400; neither ends the wait.
+pub fn wait_for_callback(listener: TcpListener, cancel: Arc<AtomicBool>, timeout: Duration, expected_state: &str) -> Result<HashMap<String, String>, SiwcError> {
     listener.set_nonblocking(true).map_err(|e| SiwcError::new("callback_failed", e.to_string()))?;
     let start = Instant::now();
     loop {
@@ -162,12 +185,13 @@ pub fn wait_for_callback(listener: TcpListener, cancel: Arc<AtomicBool>, timeout
                 }
                 let text = String::from_utf8_lossy(&buf);
                 let first = text.lines().next().unwrap_or("");
-                match parse_callback_request(first) {
-                    Some(q) => {
+                match classify_callback(first, expected_state) {
+                    CallbackRequest::Done(q) => {
                         respond(&mut stream, "200 OK", DONE_HTML);
                         return Ok(q);
                     }
-                    None => respond(&mut stream, "404 Not Found", ""),
+                    CallbackRequest::WrongState => respond(&mut stream, "400 Bad Request", WRONG_STATE_HTML),
+                    CallbackRequest::Other => respond(&mut stream, "404 Not Found", ""),
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(100)),
@@ -373,6 +397,43 @@ mod tests {
         assert_eq!(q["client_id"], "oaiapp_1");
         assert!(parse_callback_request("GET /callback?code=abc HTTP/1.1").is_none());
         assert!(parse_callback_request("GET /favicon.ico HTTP/1.1").is_none());
+    }
+
+    /// A request to the callback path with someone else's state (an old tab, an `<img>` on any page)
+    /// gets 400 and the wait goes on (#30).
+    #[test]
+    fn callback_with_wrong_state_keeps_waiting() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let waiting = std::thread::spawn(move || wait_for_callback(listener, cancel, Duration::from_secs(5), "good"));
+        let get = |target: &str| {
+            let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(s, "GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
+            let mut r = String::new();
+            let _ = s.read_to_string(&mut r);
+            r
+        };
+        let stale = get("/auth/callback?code=old&state=stale");
+        let missing = get("/auth/callback?code=old");
+        let good = get("/auth/callback?code=new&state=good");
+        stop.store(true, Ordering::Relaxed);
+        let q = waiting.join().unwrap().unwrap();
+        assert!(stale.starts_with("HTTP/1.1 400"), "{stale}");
+        assert!(missing.starts_with("HTTP/1.1 400"), "{missing}");
+        assert!(good.starts_with("HTTP/1.1 200"), "{good}");
+        assert_eq!(q["state"], "good");
+        assert_eq!(q["code"], "new");
+    }
+
+    #[test]
+    fn callback_state_check() {
+        let done = classify_callback("GET /auth/callback?code=c&state=s1 HTTP/1.1", "s1");
+        assert!(matches!(done, CallbackRequest::Done(q) if q["code"] == "c"));
+        assert_eq!(classify_callback("GET /auth/callback?code=c&state=s0 HTTP/1.1", "s1"), CallbackRequest::WrongState);
+        assert_eq!(classify_callback("GET /auth/callback?error=access_denied HTTP/1.1", "s1"), CallbackRequest::WrongState);
+        assert_eq!(classify_callback("GET /favicon.ico HTTP/1.1", "s1"), CallbackRequest::Other);
     }
 
     #[test]

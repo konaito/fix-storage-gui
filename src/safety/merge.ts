@@ -27,6 +27,12 @@ const FROM_CLI: Record<Label["verdict"], AiVerdict> = {
   system: "keep",
 };
 
+/** How the rules see a non-junk item, for the reason shown when the AI's "safe" is lowered. */
+const NOT_JUNK: Record<Exclude<Label["verdict"], "junk" | "system">, string> = {
+  unused: "使っていないかもしれないデータ扱い",
+  yours: "使用中のデータ扱い",
+};
+
 export const PENDING_REASON = "AI がまだ判定していません";
 
 /**
@@ -44,8 +50,9 @@ export function mergeVerdict({ blocked, category, cli, ai, requireAi }: MergeInp
   if (ai.verdict === "safe" && CATEGORY[category].tier === "keep") {
     return { verdict: "caution", reason: `${ai.reason}（元CLIでは個人データのカテゴリなので「注意」に下げました）`, locked: false, source: "ai" };
   }
-  if (ai.verdict === "safe" && cli.verdict === "yours") {
-    return { verdict: "caution", reason: `${ai.reason}（元CLIでは使用中のデータ扱いなので「注意」に下げました）`, locked: false, source: "ai" };
+  // Only the rules' "junk" may end up "safe"; for anything else the AI's "safe" stays "caution" (#19).
+  if (ai.verdict === "safe" && cli.verdict !== "junk") {
+    return { verdict: "caution", reason: `${ai.reason}（元CLIでは${NOT_JUNK[cli.verdict]}なので「注意」に下げました）`, locked: false, source: "ai" };
   }
   return { verdict: ai.verdict, reason: ai.reason, locked: false, source: "ai" };
 }

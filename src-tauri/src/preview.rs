@@ -7,7 +7,7 @@
 //! Every request has a generation number; a newer request (or `cancel_preview`) stops older work.
 
 use crate::roots::mac_roots;
-use crate::safety::{cannot_remove, normalize, secret_name};
+use crate::safety::{cannot_remove, real_path, secret_name};
 use base64::Engine;
 use serde::Serialize;
 use std::fs;
@@ -188,8 +188,29 @@ fn quicklook(path: &str, gen: u64, alive: &dyn Fn() -> bool) -> Result<Option<St
 
 pub fn preview(path: &str, home: &str, gen: u64, current: Arc<AtomicU64>) -> PreviewResult {
     let alive = || current.load(Ordering::SeqCst) == gen;
-    let target = normalize(path).unwrap_or_default();
     let mut res = PreviewResult { path: path.to_string(), preview: Preview::None, created_ms: None, modified_ms: None, on_disk: None, apparent: None };
+    // Protected items get no stat either: dates and sizes would tell that they exist.
+    let roots = mac_roots(home);
+    if let Some(why) = cannot_remove(path, home, &roots, true) {
+        res.preview = Preview::Blocked { reason: why };
+        return res;
+    }
+    // Everything below reads the same place the check above looked at.
+    let target = match real_path(path) {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            res.preview = Preview::Missing;
+            return res;
+        }
+        Err(()) => {
+            res.preview = Preview::Blocked { reason: "実際の場所を確かめられません".into() };
+            return res;
+        }
+    };
+    if let Some(why) = preview_denied(&target).or_else(|| preview_denied(path)) {
+        res.preview = Preview::Blocked { reason: why.into() };
+        return res;
+    }
     let Ok(meta) = fs::symlink_metadata(&target) else {
         res.preview = Preview::Missing;
         return res;
@@ -199,15 +220,6 @@ pub fn preview(path: &str, home: &str, gen: u64, current: Arc<AtomicU64>) -> Pre
     if meta.is_file() {
         res.on_disk = Some(meta.blocks() * 512);
         res.apparent = Some(meta.len());
-    }
-    let roots = mac_roots(home);
-    if let Some(why) = cannot_remove(&target, home, &roots, true) {
-        res.preview = Preview::Blocked { reason: why };
-        return res;
-    }
-    if let Some(why) = preview_denied(&target) {
-        res.preview = Preview::Blocked { reason: why.into() };
-        return res;
     }
     if meta.file_type().is_symlink() {
         return res;
@@ -295,6 +307,33 @@ mod tests {
         // Outside the home folder is blocked too.
         let r = run("/etc/hosts", &h);
         assert!(matches!(r.preview, Preview::Blocked { .. }));
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn linked_parent_does_not_leak_secrets() {
+        let home = tmp("home-link");
+        let h = home.to_string_lossy().to_string();
+        fs::create_dir_all(home.join(".config/gh")).unwrap();
+        fs::write(home.join(".config/gh/hosts.yml"), b"oauth_token: gho_secret").unwrap();
+        fs::create_dir_all(home.join("Downloads")).unwrap();
+        std::os::unix::fs::symlink(home.join(".config/gh"), home.join("Downloads/g")).unwrap();
+        let r = run(&format!("{h}/Downloads/g/hosts.yml"), &h);
+        assert!(matches!(r.preview, Preview::Blocked { .. }), "{:?}", r.preview);
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn blocked_items_have_no_stat() {
+        let home = tmp("home-nostat");
+        let h = home.to_string_lossy().to_string();
+        fs::create_dir_all(home.join(".ssh")).unwrap();
+        fs::write(home.join(".ssh/id_ed25519"), b"PRIVATE KEY").unwrap();
+        for p in [format!("{h}/.ssh/id_ed25519"), format!("{h}/.ssh/nope"), "/etc/hosts".to_string()] {
+            let r = run(&p, &h);
+            assert!(matches!(r.preview, Preview::Blocked { .. }), "{p}: {:?}", r.preview);
+            assert_eq!((r.created_ms, r.modified_ms, r.on_disk, r.apparent), (None, None, None, None), "{p}");
+        }
         let _ = fs::remove_dir_all(&home);
     }
 
