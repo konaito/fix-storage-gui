@@ -1,0 +1,60 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
+  font-size: 14px;
+  color: #1f2937;
+  background: #f3f4f6;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { color: #e5e7eb; background: #111827; }
+  .card, .modal, table, footer.bar { background: #1f2937 !important; border-color: #374151 !important; }
+  th { background: #111827 !important; }
+  tr.locked td { background: #19202c !important; }
+  .preview { background: #0b1220 !important; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+.app { padding: 16px 20px 80px; max-width: 1400px; margin: 0 auto; }
+header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 17px; margin: 0 0 12px; }
+h3 { font-size: 15px; margin: 0 0 8px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+.row.space { justify-content: space-between; }
+.row.end { justify-content: flex-end; margin-top: 12px; }
+.muted { color: #6b7280; }
+.small { font-size: 12px; }
+.tiny { font-size: 11px; word-break: break-all; }
+code { font-size: 12px; background: rgba(127,127,127,.15); padding: 1px 4px; border-radius: 4px; word-break: break-all; }
+button { font: inherit; padding: 5px 12px; border-radius: 6px; border: 1px solid #d1d5db; background: #f9fafb; color: inherit; cursor: pointer; }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+button.danger { background: #dc2626; border-color: #dc2626; color: #fff; }
+button.link { border: none; background: none; color: #2563eb; padding: 2px 4px; }
+button.chatgpt-button { background: #000; color: #fff; border-color: #000; border-radius: 999px; padding: 7px 16px; font-weight: 600; }
+select { font: inherit; padding: 4px 6px; border-radius: 6px; }
+.plan-badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #dcfce7; color: #166534; }
+.warn { color: #b45309; }
+.warn-box { background: #fffbeb; border-color: #fcd34d; }
+.error { background: #fee2e2; color: #991b1b; padding: 8px 12px; border-radius: 8px; margin-bottom: 10px; }
+.notice { background: #dbeafe; color: #1e3a8a; padding: 8px 12px; border-radius: 8px; margin-bottom: 10px; }
+table { width: 100%; border-collapse: collapse; background: #fff; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(127,127,127,.2); vertical-align: top; }
+th { position: sticky; top: 0; background: #f9fafb; font-size: 12px; font-weight: 600; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+td.name { max-width: 360px; }
+td.actions { white-space: nowrap; }
+tr.locked td { background: #f9fafb; color: #6b7280; }
+.badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; font-weight: 600; }
+.badge.safe { background: #dcfce7; color: #166534; }
+.badge.caution { background: #fef3c7; color: #92400e; }
+.badge.keep { background: #fee2e2; color: #991b1b; }
+footer.bar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: flex-end; gap: 16px; align-items: center; padding: 10px 24px; background: #fff; border-top: 1px solid #e5e7eb; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; z-index: 10; }
+.modal { background: #fff; border-radius: 12px; padding: 20px; width: min(520px, 92vw); max-height: 88vh; overflow: auto; }
+.modal.wide { width: min(860px, 94vw); }
+.preview { background: #f3f4f6; padding: 10px; border-radius: 6px; max-height: 320px; overflow: auto; font-size: 11px; }
+.confirm-list { max-height: 300px; overflow: auto; font-size: 12px; padding-left: 18px; word-break: break-all; }
+.model-row { margin-top: 10px; }
