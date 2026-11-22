@@ -123,9 +123,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 }
 .app-bar .brand h1 { font-size: 15px; margin: 0; }
 .app-bar .app-icon { width: 28px; height: 28px; font-size: 17px; border-radius: 8px; }
-/* Brand and tools take equal widths so the stepper sits in the middle of the window. */
+/* Brand and tools take equal widths so the stepper sits in the middle of the window. The stepper leaves
+   240px on each side (the tools with the free-space chip are about 226px), so the sides stay equal
+   down to a window of about 1130px. Full labels need about 790px, short ones about 590px. */
 .app-bar .brand { flex: 1 1 0; min-width: max-content; }
-.app-bar .stepper { flex: 0 1 880px; min-width: 0; background: transparent; border: none; padding: 0; }
+.app-bar .stepper { flex: 0 1 clamp(600px, calc(100% - 480px), 880px); min-width: 0; background: transparent; border: none; padding: 0; }
 .app-bar-tools { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex: 1 1 0; min-width: max-content; }
 @media (max-width: 1360px) { .app-bar .brand .version { display: none; } .app-bar .step .opt { display: none; } }
 .brand { display: flex; align-items: center; gap: 12px; }
