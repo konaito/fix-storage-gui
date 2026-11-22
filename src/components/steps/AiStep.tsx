@@ -155,7 +155,7 @@ export function AiStep(p: Props) {
 
       {!p.signedIn ? (
         <div className="callout">
-          <strong>ChatGPT にサインインすると使えます。</strong>右の「ChatGPT プランを使う」からサインインしてください。AI を使わずに一覧へ戻ることもできます。
+          <strong>ChatGPT にサインインすると使えます。</strong>画面上部のアカウントのボタンからサインインしてください。AI を使わずに一覧へ戻ることもできます。
         </div>
       ) : !p.planReady ? (
         <div className="callout warn-box">
@@ -170,7 +170,7 @@ export function AiStep(p: Props) {
           <span className="spinner tiny-spin" /> モデル一覧を取得しています…
         </div>
       ) : !p.modelName ? (
-        <div className="callout warn-box">モデル一覧を取得できていません。右のパネルの「再読み込み」を試してください。</div>
+        <div className="callout warn-box">モデル一覧を取得できていません。画面上部のアカウントのボタンを開き、「再読み込み」を試してください。</div>
       ) : (
         <div className="callout">
           <div>

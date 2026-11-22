@@ -136,21 +136,26 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .disk-chip { font-size: 12px; padding: 4px 12px; border-radius: 999px; background: var(--bg-sunken); color: var(--text-2); }
 .disk-chip strong { color: var(--text); }
 
-.layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 20px; padding: 16px 24px 24px; max-width: 1440px; width: 100%; margin: 0 auto; align-items: start; }
-.layout.wide { grid-template-columns: minmax(0, 1fr); }
-.sidebar[hidden] { display: none; }
-@media (max-width: 1040px) { .layout { grid-template-columns: 1fr; } .sidebar { position: static; } }
+.layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); padding: 16px 24px 24px; max-width: 1440px; width: 100%; margin: 0 auto; align-items: start; }
 .main { min-width: 0; }
-.sidebar { position: sticky; top: 20px; display: flex; flex-direction: column; gap: 12px; }
 .page { animation: page-in 0.22s ease-out; }
 @keyframes page-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .page { animation: none; } }
 
 .card { background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); margin-bottom: 12px; }
-.sidebar .card { margin-bottom: 0; }
-.card.safety ul { margin: 0; padding-left: 18px; font-size: 12px; color: var(--text-2); }
-.card.safety li { margin: 6px 0; }
-.card.safety strong { color: var(--text); }
+/* Account button + popover in the app bar (components/AccountMenu.tsx). Below .modal-backdrop (z-index 10). */
+.account-menu { position: relative; }
+.account-chip { display: inline-flex; align-items: center; padding: 4px 6px; }
+.account-initial { flex: none; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; background: var(--accent); color: #fff; }
+.account-popover { position: absolute; top: calc(100% + 8px); right: 0; z-index: 9; width: min(420px, calc(100vw - 40px)); }
+.account-popover > .card { margin-bottom: 0; border-color: var(--line-strong); box-shadow: var(--shadow-lg); }
+/* "安全のしくみ" on step 1 (components/SafetyNotes.tsx), styled like .login-docs. */
+.safety-notes { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 20px; }
+.safety-notes summary { color: var(--text-2); font-size: 13px; width: fit-content; }
+.safety-notes summary:hover { color: var(--text); }
+.safety-notes ul { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: var(--text-2); }
+.safety-notes li { margin: 6px 0; }
+.safety-notes strong { color: var(--text); }
 .account .row { margin: 6px 0; }
 .model-row { margin-top: 10px; }
 .plan-badge { font-size: 11px; padding: 2px 9px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); font-weight: 600; }

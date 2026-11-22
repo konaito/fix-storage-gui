@@ -6,6 +6,7 @@ import { chatGptProvider } from "./ai/chatgpt";
 import { chunk, toPayload } from "./ai/prompt";
 import type { AiJudgement, JudgeProvider } from "./ai/provider";
 import { DEFAULT_CONCURRENCY, runBatches } from "./ai/runBatches";
+import { AccountMenu } from "./components/AccountMenu";
 import { AccountPanel } from "./components/AccountPanel";
 import { ActionBarSlot } from "./components/ActionBar";
 import { AiSendDialog } from "./components/AiSendDialog";
@@ -358,8 +359,6 @@ export default function App() {
   const aiSummary = useMemo(() => summarize(view.filter((r) => r.final.source === "ai")), [view]);
   const modelInfo = models.find((m) => m.slug === model);
 
-  // The list / confirmation steps need the full width; the account panel matters on steps 1, 2 and 4.
-  const wide = flow.step === "review" || flow.step === "trash" || flow.step === "done";
   let page;
   switch (flow.step) {
     case "target":
@@ -500,13 +499,29 @@ export default function App() {
             空き <strong>{formatBytes(disk.available)}</strong>
           </div>
         )}
+          <AccountMenu label={active?.label ?? null} signingIn={signingIn} locked={flow.busy === "trash" ? "ゴミ箱へ移動中" : null}>
+            <AccountPanel
+              status={status}
+              models={models}
+              modelsLoading={modelsLoading}
+              model={model}
+              onModel={setModel}
+              signingIn={signingIn}
+              onSignIn={(id, consent) => void signIn(id, consent)}
+              onCancelSignIn={() => void api.siwcCancelSignIn()}
+              onSwitch={(id) => void api.siwcSwitch(id).then(refreshStatus)}
+              onSignOut={() => void signOut()}
+              onManageUsage={() => void api.openUsage()}
+              onReloadModels={() => void loadModels()}
+            />
+          </AccountMenu>
         </div>
       </header>
       {/* Each step renders its title and actions here (StepBar), so the main action never scrolls away. */}
       <div className="topbar-slot" ref={setBarSlot} />
 
       <div className="scroll">
-      <div className={`layout ${wide ? "wide" : ""}`}>
+      <div className="layout">
         <main className="main">
           {error && (
             <div className="error" role="alert">
@@ -530,40 +545,6 @@ export default function App() {
             </div>
           </ActionBarSlot>
         </main>
-
-        <aside className="sidebar" hidden={wide}>
-          <AccountPanel
-            status={status}
-            models={models}
-            modelsLoading={modelsLoading}
-            model={model}
-            onModel={setModel}
-            signingIn={signingIn}
-            onSignIn={(id, consent) => void signIn(id, consent)}
-            onCancelSignIn={() => void api.siwcCancelSignIn()}
-            onSwitch={(id) => void api.siwcSwitch(id).then(refreshStatus)}
-            onSignOut={() => void signOut()}
-            onManageUsage={() => void api.openUsage()}
-            onReloadModels={() => void loadModels()}
-          />
-          <div className="card safety">
-            <h3>安全のしくみ</h3>
-            <ul>
-              <li>
-                <strong>ゴミ箱へ移すだけ。</strong>完全には削除しません。
-              </li>
-              <li>
-                <strong>保護リストが最優先。</strong>システム領域・鍵・.git・キーチェーンなどは選べません。
-              </li>
-              <li>
-                <strong>AI に送るのはメタデータだけ。</strong>送る前に内容をすべて確認できます。
-              </li>
-              <li>
-                <strong>移動の直前にもう一度チェック。</strong>
-              </li>
-            </ul>
-          </div>
-        </aside>
       </div>
       </div>
 

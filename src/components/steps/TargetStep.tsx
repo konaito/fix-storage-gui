@@ -1,5 +1,6 @@
 import { StepBar } from "../ActionBar";
 import { formatBytes } from "../../lib/format";
+import { SafetyNotes } from "../SafetyNotes";
 
 export type Target = { kind: "mac" } | { kind: "folder"; path: string };
 
@@ -102,6 +103,7 @@ export function TargetStep(p: Props) {
         </div>
       )}
 
+      <SafetyNotes />
     </section>
   );
 }
