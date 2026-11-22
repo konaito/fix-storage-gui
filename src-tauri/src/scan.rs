@@ -4,7 +4,7 @@
 //! Everything here runs locally; nothing is sent anywhere.
 
 use crate::roots::{category_of, mac_roots, CategoryId, Root};
-use crate::safety::cannot_remove;
+use crate::safety::Guard;
 use serde::Serialize;
 use std::collections::{HashSet, VecDeque};
 use std::fs;
@@ -300,6 +300,7 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     list.truncate(opts.limit);
 
     let paths: Vec<String> = list.iter().map(|(p, _, _)| p.clone()).collect();
+    let guard = Guard::new(&opts.home, &roots, true);
     on_progress(Progress { phase: "measuring", current: String::new(), done: done.load(Ordering::Relaxed), total });
     let used = last_used(&paths, &*on_progress);
     on_progress(Progress { phase: "dates", current: String::new(), done: paths.len(), total: paths.len() });
@@ -311,7 +312,7 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
             let name = path.rsplit('/').next().unwrap_or("").to_string();
             ScanItem {
                 category: category_of(&path, &roots),
-                blocked: cannot_remove(&path, &opts.home, &roots, true),
+                blocked: guard.check(&path),
                 name,
                 path,
                 size,
@@ -361,5 +362,38 @@ mod tests {
         assert!(res.items[0].dir && res.items[0].size >= 200_000);
         assert!(res.items[0].blocked.is_some(), "outside home is blocked");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn scan_folder(home: &str, folder: &str) -> ScanResult {
+        run_scan(
+            ScanOptions { home: home.into(), folder: Some(folder.into()), min_size: 0, limit: 100 },
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+    }
+
+    #[test]
+    fn linked_folder_contents_are_blocked() {
+        let home = std::env::temp_dir().join(format!("fsg-scan-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join(".ssh")).unwrap();
+        fs::write(home.join(".ssh/config"), b"Host x").unwrap();
+        fs::create_dir_all(home.join("Downloads")).unwrap();
+        fs::write(home.join("Downloads/a.txt"), b"hi").unwrap();
+        std::os::unix::fs::symlink(home.join(".ssh"), home.join("Downloads/lnk")).unwrap();
+        let h = home.to_string_lossy().to_string();
+        let res = scan_folder(&h, &format!("{h}/Downloads/lnk"));
+        assert_eq!(res.items.len(), 1);
+        assert!(res.items[0].blocked.is_some(), "{:?}", res.items[0]);
+        // Ordinary items in the same home stay allowed.
+        let res = scan_folder(&h, &format!("{h}/Downloads"));
+        let a = res.items.iter().find(|i| i.name == "a.txt").unwrap();
+        assert!(a.blocked.is_none(), "{a:?}");
+        // With no usable home folder, nothing is offered.
+        for bad in ["", "/"] {
+            let res = scan_folder(bad, &format!("{h}/Downloads"));
+            assert!(!res.items.is_empty() && res.items.iter().all(|i| i.blocked.is_some()), "home={bad:?}");
+        }
+        let _ = fs::remove_dir_all(&home);
     }
 }
