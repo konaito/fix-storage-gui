@@ -1,8 +1,9 @@
 name: Release
 
 # v* タグの push で GitHub Release を作り、universal の .dmg を添付する。
-# 署名・公証の Secrets があれば Developer ID で署名＋公証、なければ ad-hoc 署名（未公証）でビルドする。
+# Developer ID で署名して公証する。署名・公証の Secrets が1つでも欠けていたら、ビルドの前に止める。
 # あわせてアプリ内アップデート用の署名付き更新バンドル（.app.tar.gz と .sig）と latest.json を Release に載せる。
+# Release はドラフトで作り、latest.json を検査してから公開する（検査で落ちたら、利用者には何も配られない）。
 # 参考: https://v2.tauri.app/distribute/pipelines/github/ 、https://v2.tauri.app/distribute/sign/macos/ 、https://v2.tauri.app/plugin/updater/
 on:
   push:
@@ -36,6 +37,19 @@ jobs:
             exit 1
           fi
 
+      # 署名者の違う未公証の .app が latest.json 経由で配られると、公証済みの版を使っている人のアプリ内アップデートで置き換わる。
+      # そのため ad-hoc 署名や署名のみでは出さず、Secrets が欠けていたら止める。
+      - name: Check Apple signing and notarization secrets
+        run: |
+          if [ "$HAS_SIGNING" != "true" ]; then
+            echo "::error::Secrets APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / KEYCHAIN_PASSWORD がありません（README の「公証の有効化手順」を参照）"
+            exit 1
+          fi
+          if [ "$HAS_NOTARIZATION" != "true" ]; then
+            echo "::error::Secrets APPLE_API_ISSUER / APPLE_API_KEY / APPLE_API_PRIVATE_KEY がありません（README の「公証の有効化手順」を参照）"
+            exit 1
+          fi
+
       - uses: actions/setup-node@v6
         with:
           node-version: lts/*
@@ -51,9 +65,8 @@ jobs:
       - run: npm test
       - run: cargo test --manifest-path src-tauri/Cargo.toml
 
-      # ---- 署名（Secrets があるときだけ。手順は Tauri 公式の GitHub Actions 例のとおり） ----
+      # ---- 署名（手順は Tauri 公式の GitHub Actions 例のとおり） ----
       - name: Import Apple Developer Certificate
-        if: env.HAS_SIGNING == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -70,7 +83,6 @@ jobs:
           rm certificate.p12
 
       - name: Use Developer ID signing identity
-        if: env.HAS_SIGNING == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -85,7 +97,6 @@ jobs:
 
       # ---- 公証（App Store Connect API。APPLE_API_KEY_PATH は秘密鍵ファイルのパス） ----
       - name: Prepare App Store Connect API key for notarization
-        if: env.HAS_SIGNING == 'true' && env.HAS_NOTARIZATION == 'true'
         env:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -98,12 +109,6 @@ jobs:
           echo "APPLE_API_KEY=$APPLE_API_KEY" >> "$GITHUB_ENV"
           echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
-      # ---- Secrets がないとき: ad-hoc 署名（未公証） ----
-      - name: Use ad-hoc signing (no Apple secrets)
-        if: env.HAS_SIGNING != 'true'
-        # https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing
-        run: echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
-
       - name: Release notes
         id: notes
         env:
@@ -113,22 +118,8 @@ jobs:
           # （<!-- updater-notes-end --> より前。src/lib/updater.ts の extractNotes）。
           CHANGES=$(gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$GITHUB_REF_NAME" --jq .body 2>/dev/null || true)
           if [ -z "$CHANGES" ]; then CHANGES="（変更点の自動生成に失敗しました。コミット履歴を参照してください）"; fi
-          if [ "$HAS_SIGNING" = "true" ] && [ "$HAS_NOTARIZATION" = "true" ]; then
-            STATUS="この .dmg は Developer ID で署名し、Apple の公証（notarization）を通しています。"
-            HOWTO="ダウンロードした .dmg を開き、Fix Storage GUI.app を「アプリケーション」へドラッグしてください。"
-          elif [ "$HAS_SIGNING" = "true" ]; then
-            STATUS="この .dmg は Developer ID で署名していますが、**公証（notarization）はしていません**。"
-            HOWTO="初回はブロックされることがあります。その場合は README の「未署名・未公証アプリの開き方」を参照してください。"
-          else
-            STATUS="この .dmg は **未署名・未公証** です（ad-hoc 署名のみ。Apple の Developer ID 署名と公証はしていません）。"
-            HOWTO=$(cat <<'TXT'
-          1. .dmg を開き、Fix Storage GUI.app を「アプリケーション」へドラッグします。
-          2. 初回はアプリを開こうとすると macOS にブロックされます。システム設定 → プライバシーとセキュリティ の下の方にある「このまま開く」を押してください（古い macOS では Finder で右クリック →「開く」でも開けます）。
-          3. またはターミナルで次を実行してから開きます:
-             `xattr -dr com.apple.quarantine "/Applications/Fix Storage GUI.app"`
-          TXT
-          )
-          fi
+          STATUS="この .dmg は Developer ID で署名し、Apple の公証（notarization）を通しています。"
+          HOWTO="ダウンロードした .dmg を開き、Fix Storage GUI.app を「アプリケーション」へドラッグしてください。"
           {
             echo "body<<NOTES_EOF"
             echo "### ${GITHUB_REF_NAME} の変更点"
@@ -161,7 +152,8 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'Fix Storage GUI ${{ github.ref_name }}'
           releaseBody: ${{ steps.notes.outputs.body }}
-          releaseDraft: false
+          # ドラフトで作り、下の Verify latest.json が通ってから Publish release で公開する。
+          releaseDraft: true
           prerelease: false
           releaseAssetNamePattern: 'fix-storage-gui_[version]_[arch][ext]'
           args: '--target universal-apple-darwin --bundles app,dmg'
@@ -169,7 +161,8 @@ jobs:
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
 
-      # アプリは https://github.com/<repo>/releases/latest/download/latest.json を見に来る。中身が正しいかここで確かめる。
+      # アプリは https://github.com/<repo>/releases/latest/download/latest.json を見に来る。公開する前に、ドラフトの中身を確かめる。
+      # gh release download はタグ名でドラフトも引ける（gh の FetchRelease が公開済みとドラフトの両方を探す）。
       - name: Verify latest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -187,3 +180,10 @@ jobs:
           }
           console.log('latest.json OK');
           JS
+
+      # 検査が通ってから公開する。アプリが読むのは releases/latest なので、--latest で Latest にする。
+      # ここまでで落ちたときは、ドラフトの Release が残るだけで利用者には配られない（README の「リリースの出し方」を参照）。
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --draft=false --latest

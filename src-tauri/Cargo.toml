@@ -1,6 +1,6 @@
 [package]
 name = "fix-storage-gui"
-version = "0.2.1"
+version = "0.2.2"
 description = "Tauri GUI for fix-storage with AI review via Sign in with ChatGPT"
 authors = ["konaito"]
 license = "MIT"
@@ -29,7 +29,6 @@ base64 = "0.22"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
 url = "2"
-thiserror = "2"
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]

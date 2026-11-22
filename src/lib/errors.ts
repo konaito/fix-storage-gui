@@ -34,3 +34,8 @@ export function describeError(e: unknown): string {
   if (diag) parts.push(`[${diag}]`);
   return parts.join(" ");
 }
+
+/** Message for the error band when "Finder で表示" fails (#63). The Rust side returns only the reason. */
+export function revealFailedJa(e: unknown): string {
+  return `Finder で表示できませんでした: ${describeError(e)}`;
+}

@@ -60,8 +60,25 @@ fn env_info() -> EnvInfo {
     EnvInfo { home, user, os: std::env::consts::OS, version: env!("CARGO_PKG_VERSION") }
 }
 
+/// A scan progress event tagged with the scan it belongs to, so the window can drop
+/// events from an earlier scan that is still winding down.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanProgressEvent {
+    scan_id: u64,
+    #[serde(flatten)]
+    progress: scan::Progress,
+}
+
+/// `scan_id` is chosen by the window (a counter per scan) and echoed in every `scan-progress` event.
 #[tauri::command]
-async fn scan(app: tauri::AppHandle, state: State<'_, AppState>, folder: Option<String>, min_size: u64) -> Result<scan::ScanResult, String> {
+async fn scan(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    folder: Option<String>,
+    min_size: u64,
+    scan_id: u64,
+) -> Result<scan::ScanResult, String> {
     let cancel = Arc::new(AtomicBool::new(false));
     if let Some(old) = state.scan_cancel.lock().unwrap().replace(cancel.clone()) {
         old.store(true, Ordering::Relaxed);
@@ -73,12 +90,12 @@ async fn scan(app: tauri::AppHandle, state: State<'_, AppState>, folder: Option<
     let opts = scan::ScanOptions { home: home()?, folder, min_size, limit: 400 };
     let emitter = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        scan::run_scan(opts, cancel, move |p| {
-            let _ = emitter.emit("scan-progress", p);
+        scan::run_scan(opts, cancel, move |progress| {
+            let _ = emitter.emit("scan-progress", ScanProgressEvent { scan_id, progress });
         })
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?
 }
 
 /// Local-only preview for the detail panel (never sent to the AI). Supersedes any earlier request.
@@ -124,10 +141,22 @@ struct TrashProgress {
     current: String,
 }
 
-#[tauri::command]
+/// Waits for `open -R` (off the main thread) so a failure reaches the window and no zombie is left.
+#[tauri::command(async)]
 fn reveal_in_finder(path: String) -> Result<(), String> {
     let p = safety::normalize(&path).ok_or("正しいパスではありません")?;
-    std::process::Command::new("open").args(["-R", &p]).spawn().map(|_| ()).map_err(|e| e.to_string())
+    let status = std::process::Command::new("open")
+        .args(["-R", &p])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("open コマンドを起動できませんでした（{e}）"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("open -R が失敗しました（{p}）"))
+    }
 }
 
 #[tauri::command]
@@ -258,6 +287,27 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// #40: progress events carry the scan id next to the progress fields.
+    #[test]
+    fn scan_progress_event_shape() {
+        let e = ScanProgressEvent { scan_id: 7, progress: scan::Progress { phase: "measuring", current: "/a".into(), done: 1, total: 2 } };
+        assert_eq!(
+            serde_json::to_value(e).unwrap(),
+            serde_json::json!({ "scanId": 7, "phase": "measuring", "current": "/a", "done": 1, "total": 2 })
+        );
+    }
+
+    /// #39: a failed `open -R` is reported instead of being dropped.
+    #[test]
+    fn reveal_missing_path_fails() {
+        let r = reveal_in_finder("/nonexistent/fsg-reveal-test".into());
+        assert!(r.is_err(), "missing path was reported as revealed");
+        // #63: the window adds "Finder で表示できませんでした: " in front, so the Rust side returns only the reason.
+        assert!(!r.unwrap_err().starts_with("Finder で表示できませんでした"));
+    }
+
     #[test]
     fn passwd_home_is_usable() {
         let h = super::passwd_home().expect("home from the user database");
