@@ -6,6 +6,7 @@ import { chunk, toPayload } from "./ai/prompt";
 import type { AiJudgement, JudgeProvider } from "./ai/provider";
 import { AccountPanel } from "./components/AccountPanel";
 import { AiSendDialog } from "./components/AiSendDialog";
+import { useGate } from "./components/GateContext";
 import { Modal } from "./components/Modal";
 import { TrashDialog } from "./components/TrashDialog";
 import { api, isSiwcError, type EnvInfo, type Model, type ScanProgress, type SiwcStatus, type TrashOutcome } from "./lib/api";
@@ -60,7 +61,12 @@ export default function App() {
   }, []);
 
   const active = status?.accounts.find((a) => a.clientId === status.active);
-  const planReady = !!active?.signedIn && !!active.planEnabled;
+  // AI judgement needs both this app's view of the account and the login gate's plan-use consent.
+  const gate = useGate();
+  const planReady = gate.planEnabled && !!active?.signedIn && !!active.planEnabled;
+  useEffect(() => {
+    if (gate.statusVersion > 0) void refreshStatus();
+  }, [gate.statusVersion, refreshStatus]);
 
   const loadModels = useCallback(async () => {
     try {
@@ -163,7 +169,7 @@ export default function App() {
 
   async function sendToAi(mask: boolean) {
     setAiDialog(false);
-    if (!env || !model) return;
+    if (!env || !model || !planReady) return;
     const maskOpts = { enabled: mask, home: env.home, user: env.user };
     const indexed = aiTargets.map((r, i) => ({ id: `i${i}`, row: r }));
     const batches = chunk(indexed, BATCH);
@@ -331,7 +337,7 @@ export default function App() {
             <button
               className="primary"
               disabled={!planReady || aiTargets.length === 0 || !!aiRunning || !model}
-              title={planReady ? "" : "ChatGPT にサインインすると使えます"}
+              title={planReady ? "" : "ChatGPT プランの利用を許可すると使えます"}
               onClick={() => setAiDialog(true)}
             >
               3. AI で判定（{aiTargets.length} 件）
@@ -424,7 +430,7 @@ export default function App() {
         </button>
       </footer>
 
-      {aiDialog && env && (
+      {aiDialog && env && planReady && (
         <AiSendDialog
           rows={aiTargets}
           provider={PROVIDER}

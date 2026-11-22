@@ -39,3 +39,34 @@ describe("login gate", () => {
     for (const d of SIWC_DOCS) expect(d.url).toMatch(/^https:\/\/developers\.openai\.com\/siwc(\/|$)/);
   });
 });
+
+describe("rule-only choice", () => {
+  it("is remembered per account and cleared on sign-out", async () => {
+    const mem = new Map<string, string>();
+    const ls = {
+      getItem: (k: string) => mem.get(k) ?? null,
+      setItem: (k: string, v: string) => void mem.set(k, v),
+      removeItem: (k: string) => void mem.delete(k),
+      key: (i: number) => [...mem.keys()][i] ?? null,
+      get length() {
+        return mem.size;
+      },
+    };
+    const g = globalThis as unknown as { localStorage?: unknown };
+    g.localStorage = ls;
+    const { ruleOnlyChoice } = await import("../src/lib/gate");
+    expect(ruleOnlyChoice.get("oaiapp_1")).toBe(false);
+    ruleOnlyChoice.set("oaiapp_1", true);
+    expect(ruleOnlyChoice.get("oaiapp_1")).toBe(true);
+    expect(ruleOnlyChoice.get("oaiapp_2")).toBe(false);
+    mem.set("other", "x");
+    ruleOnlyChoice.clearAll();
+    expect(ruleOnlyChoice.get("oaiapp_1")).toBe(false);
+    expect(mem.has("other")).toBe(true);
+    delete g.localStorage;
+  });
+  it("falls back to not remembered when storage is unavailable", async () => {
+    const { ruleOnlyChoice } = await import("../src/lib/gate");
+    expect(ruleOnlyChoice.get("oaiapp_1")).toBe(false);
+  });
+});

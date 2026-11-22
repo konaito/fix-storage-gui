@@ -34,3 +34,36 @@ export function gateView(status: SiwcStatus | null, loadError: string | null): G
   if (!active.planEnabled) return { kind: "plan_disabled", account: active };
   return { kind: "ready", account: active };
 }
+
+const RULE_ONLY_KEY = "fsg.ruleOnly.";
+
+/** Remembers (per account registration) that the user chose to continue without ChatGPT plan usage. */
+export const ruleOnlyChoice = {
+  get(clientId: string): boolean {
+    try {
+      return localStorage.getItem(RULE_ONLY_KEY + clientId) === "1";
+    } catch {
+      return false;
+    }
+  },
+  clearAll() {
+    try {
+      const keys: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k?.startsWith(RULE_ONLY_KEY)) keys.push(k);
+      }
+      for (const k of keys) localStorage.removeItem(k);
+    } catch {
+      /* ignore */
+    }
+  },
+  set(clientId: string, on: boolean) {
+    try {
+      if (on) localStorage.setItem(RULE_ONLY_KEY + clientId, "1");
+      else localStorage.removeItem(RULE_ONLY_KEY + clientId);
+    } catch {
+      /* storage unavailable: the choice lasts for this session only */
+    }
+  },
+};
