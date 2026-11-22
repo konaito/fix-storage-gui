@@ -35,6 +35,15 @@ export function gateView(status: SiwcStatus | null, loadError: string | null): G
   return { kind: "ready", account: active };
 }
 
+/**
+ * Registration that the login screen's main button reauthorises: the one that needs reauth,
+ * else the only saved one (after a sign-out the registration is kept, only its tokens are gone).
+ * `null` registers a new client.
+ */
+export function primarySignInTarget(reauth: AccountView | null, saved: AccountView[]): AccountView | null {
+  return reauth ?? (saved.length === 1 ? saved[0] : null);
+}
+
 const RULE_ONLY_KEY = "fsg.ruleOnly.";
 
 /** Remembers (per account registration) that the user chose to continue without ChatGPT plan usage. */

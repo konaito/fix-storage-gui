@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AccountView, SiwcStatus } from "../src/lib/api";
-import { gateView, SIWC_DOCS } from "../src/lib/gate";
+import { gateView, primarySignInTarget, SIWC_DOCS } from "../src/lib/gate";
 
 const acc = (o: Partial<AccountView> = {}): AccountView => ({
   clientId: "oaiapp_1",
@@ -68,5 +68,21 @@ describe("rule-only choice", () => {
   it("falls back to not remembered when storage is unavailable", async () => {
     const { ruleOnlyChoice } = await import("../src/lib/gate");
     expect(ruleOnlyChoice.get("oaiapp_1")).toBe(false);
+  });
+});
+
+describe("main sign-in button target", () => {
+  it("reauthorises the only saved registration after a sign-out instead of registering a new client", () => {
+    const saved = acc({ signedIn: false });
+    expect(primarySignInTarget(null, [saved])?.clientId).toBe("oaiapp_1");
+  });
+  it("prefers the registration that needs reauth", () => {
+    const a = acc({ signedIn: false });
+    const b = acc({ clientId: "oaiapp_2", signedIn: false, needsReauth: true });
+    expect(primarySignInTarget(b, [a, b])?.clientId).toBe("oaiapp_2");
+  });
+  it("registers a new client when there is nothing saved or the choice is ambiguous", () => {
+    expect(primarySignInTarget(null, [])).toBeNull();
+    expect(primarySignInTarget(null, [acc(), acc({ clientId: "oaiapp_2" })])).toBeNull();
   });
 });

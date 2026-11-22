@@ -211,7 +211,21 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             app_menu::install(app)?;
             let dir = app.path().app_data_dir()?.join("siwc");
-            app.manage(AppState { siwc: siwc::Siwc::new(dir), scan_cancel: Mutex::new(None), preview_gen: Default::default() });
+            let siwc = siwc::Siwc::new(dir);
+            // Keychain items that accounts.json doesn't know: picked here, before any sign-in can
+            // store a new item, then revoked and deleted in the background. A broken accounts.json
+            // skips this (status() reports it) instead of treating every item as orphaned.
+            let orphans = siwc.orphan_credentials().unwrap_or_else(|e| {
+                eprintln!("siwc: skipped keychain cleanup: {e}");
+                Vec::new()
+            });
+            app.manage(AppState { siwc, scan_cancel: Mutex::new(None), preview_gen: Default::default() });
+            if !orphans.is_empty() {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    handle.state::<AppState>().siwc.remove_orphans(orphans).await;
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -34,6 +34,8 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+# キーチェーンの項目の列挙（keyring には列挙の API が無い）。keyring と同じ版。
+security-framework = "3"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 # アプリ内アップデート（https://v2.tauri.app/plugin/updater/）と更新後の再起動

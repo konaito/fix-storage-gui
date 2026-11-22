@@ -49,6 +49,9 @@ pub struct Siwc {
     http: reqwest::Client,
     refresh_lock: tokio::sync::Mutex<()>,
     sign_in_cancel: std::sync::Mutex<Option<Arc<AtomicBool>>>,
+    /// A broken `accounts.json` found outside `status()` (e.g. by the startup cleanup).
+    /// The file is moved aside on first read, so the error is kept here for `status()` to show once.
+    storage_error: std::sync::Mutex<Option<SiwcError>>,
 }
 
 fn now() -> i64 {
@@ -70,12 +73,26 @@ impl Siwc {
             .connect_timeout(Duration::from_secs(15))
             .build()
             .expect("http client");
-        Self { store: Store::new(dir), http, refresh_lock: tokio::sync::Mutex::new(()), sign_in_cancel: std::sync::Mutex::new(None) }
+        Self { store: Store::new(dir), http, refresh_lock: tokio::sync::Mutex::new(()), sign_in_cancel: std::sync::Mutex::new(None), storage_error: std::sync::Mutex::new(None) }
+    }
+
+    /// `accounts.json`, or a `storage` error. Never an empty list in place of an unreadable file.
+    fn accounts(&self) -> Result<store::AccountsFile, SiwcError> {
+        self.store.accounts().map_err(|e| {
+            let err = SiwcError::new("storage", e);
+            *self.storage_error.lock().unwrap() = Some(err.clone());
+            err
+        })
     }
 
     pub fn status(&self) -> Result<Status, SiwcError> {
         let host_id = self.store.host_id().map_err(|e| SiwcError::new("storage", e))?;
-        let a = self.store.accounts();
+        if let Some(e) = self.storage_error.lock().unwrap().take() {
+            return Err(e);
+        }
+        let a = self.accounts().inspect_err(|_| {
+            self.storage_error.lock().unwrap().take();
+        })?;
         let accounts = a
             .accounts
             .iter()
@@ -93,7 +110,7 @@ impl Siwc {
     }
 
     pub fn ack_welcome(&self) -> Result<(), SiwcError> {
-        let mut a = self.store.accounts();
+        let mut a = self.accounts()?;
         a.welcome_shown = true;
         self.store.save_accounts(&a).map_err(|e| SiwcError::new("storage", e))
     }
@@ -105,7 +122,7 @@ impl Siwc {
     }
 
     pub fn switch_account(&self, client_id: &str) -> Result<(), SiwcError> {
-        let mut a = self.store.accounts();
+        let mut a = self.accounts()?;
         if !a.accounts.iter().any(|m| m.client_id == client_id) {
             return Err(SiwcError::new("invalid", "そのアカウントは登録されていません"));
         }
@@ -117,7 +134,7 @@ impl Siwc {
     /// (`dynamic_agent_client`); otherwise reauthorises that saved registration.
     pub async fn sign_in(&self, client_id: Option<String>, prompt_consent: bool, open_browser: impl FnOnce(&str) -> Result<(), String>) -> Result<AccountView, SiwcError> {
         let host_id = self.store.host_id().map_err(|e| SiwcError::new("storage", e))?;
-        let accounts = self.store.accounts();
+        let accounts = self.accounts()?;
         let existing = client_id.as_ref().and_then(|id| accounts.accounts.iter().find(|m| &m.client_id == id).cloned());
         if client_id.is_some() && existing.is_none() {
             return Err(SiwcError::new("invalid", "そのアカウントは登録されていません"));
@@ -196,31 +213,90 @@ impl Siwc {
         let scopes = oauth::split_scopes(tokens.scope.as_deref());
         let plan_enabled = scopes.iter().any(|s| s == oauth::PLAN_SCOPE);
 
-        // 5. store.
-        let creds = Credentials {
-            id_token,
-            access_token: tokens.access_token,
-            refresh_token: tokens.refresh_token,
-            token_type: tokens.token_type.unwrap_or_else(|| "Bearer".into()),
-            expires_at: received + tokens.expires_in.unwrap_or(3600),
-            scopes: scopes.clone(),
-            saved_at: received,
-        };
-        self.store.save_credentials(&issued, &creds).map_err(|e| SiwcError::new("storage", e))?;
-        let mut a = self.store.accounts();
-        let meta = AccountMeta { client_id: issued.clone(), subject: claims.sub, email: claims.email, scopes, plan_enabled, needs_reauth: false };
-        match a.accounts.iter_mut().find(|m| m.client_id == issued) {
-            Some(m) => *m = meta.clone(),
-            None => a.accounts.push(meta.clone()),
+        // 5. one registration per person: decide before anything is stored.
+        // Held so a refresh of an account that is about to be dropped can't run at the same time.
+        let _guard = self.refresh_lock.lock().await;
+        let mut a = self.accounts()?;
+        let resolution = resolve_same_subject(&a.accounts, &issued, &claims.sub, existing.is_none(), plan_enabled, |m| {
+            !m.needs_reauth && self.store.load_credentials(&m.client_id).is_some()
+        });
+        match resolution {
+            SubjectResolution::UseExisting { client_id: keep, drop } => {
+                // The registration just created is not kept: revoke its tokens without storing them.
+                if let Some(rt) = tokens.refresh_token.as_deref() {
+                    let _ = oauth::revoke(&self.http, &issued, rt).await;
+                }
+                for id in drop.iter().filter(|id| **id != issued) {
+                    let _ = self.discard(id).await;
+                }
+                a.accounts.retain(|m| !drop.contains(&m.client_id));
+                a.active = Some(keep.clone());
+                self.store.save_accounts(&a).map_err(|e| SiwcError::new("storage", e))?;
+                let m = a.accounts.iter().find(|m| m.client_id == keep).cloned().unwrap_or_default();
+                Ok(AccountView { client_id: keep, label: label_for(&m), email: m.email.clone(), plan_enabled: m.plan_enabled, signed_in: true, needs_reauth: false })
+            }
+            SubjectResolution::KeepNew { drop } => {
+                let creds = Credentials {
+                    id_token,
+                    access_token: tokens.access_token,
+                    refresh_token: tokens.refresh_token,
+                    token_type: tokens.token_type.unwrap_or_else(|| "Bearer".into()),
+                    expires_at: received + tokens.expires_in.unwrap_or(3600),
+                    scopes: scopes.clone(),
+                    saved_at: received,
+                };
+                self.store.save_credentials(&issued, &creds).map_err(|e| SiwcError::new("storage", e))?;
+                let meta = AccountMeta { client_id: issued.clone(), subject: claims.sub, email: claims.email, scopes, plan_enabled, needs_reauth: false };
+                a.accounts.retain(|m| !drop.contains(&m.client_id));
+                match a.accounts.iter_mut().find(|m| m.client_id == issued) {
+                    Some(m) => *m = meta.clone(),
+                    None => a.accounts.push(meta.clone()),
+                }
+                a.active = Some(issued.clone());
+                self.store.save_accounts(&a).map_err(|e| SiwcError::new("storage", e))?;
+                for id in &drop {
+                    let _ = self.discard(id).await;
+                }
+                Ok(AccountView { client_id: issued, label: label_for(&meta), email: meta.email, plan_enabled, signed_in: true, needs_reauth: false })
+            }
         }
-        a.active = Some(issued.clone());
-        self.store.save_accounts(&a).map_err(|e| SiwcError::new("storage", e))?;
-        Ok(AccountView { client_id: issued, label: label_for(&meta), email: meta.email, plan_enabled, signed_in: true, needs_reauth: false })
+    }
+
+    /// Revokes the refresh token of `client_id` (best effort) and deletes its keychain item.
+    /// Returns whether the remote revocation is known to have happened. Caller holds `refresh_lock`.
+    async fn discard(&self, client_id: &str) -> Result<bool, SiwcError> {
+        let creds = self.store.load_credentials(client_id);
+        let revoked = match creds.as_ref().and_then(|c| c.refresh_token.clone()) {
+            Some(rt) => oauth::revoke(&self.http, client_id, &rt).await,
+            None => creds.is_none(),
+        };
+        self.store.clear_credentials(client_id).map_err(|e| SiwcError::new("storage", e))?;
+        Ok(revoked)
+    }
+
+    /// Keychain items under this app's service that `accounts.json` doesn't know. Run once at startup,
+    /// synchronously, before any sign-in can store a new item. Errors (including a broken
+    /// `accounts.json`) mean "don't clean up"; they never mean "no accounts".
+    pub fn orphan_credentials(&self) -> Result<Vec<String>, SiwcError> {
+        let a = self.accounts()?;
+        let ids = store::keychain_client_ids().map_err(|e| SiwcError::new("storage", e))?;
+        Ok(orphan_items(&ids, &a))
+    }
+
+    /// Revokes and deletes the items found by [`Self::orphan_credentials`].
+    pub async fn remove_orphans(&self, client_ids: Vec<String>) {
+        let _guard = self.refresh_lock.lock().await;
+        for id in client_ids {
+            if let Err(e) = self.discard(&id).await {
+                eprintln!("siwc: could not remove orphaned keychain item {id}: {e}");
+            }
+        }
     }
 
     fn mark_reauth(&self, client_id: &str) {
         let _ = self.store.clear_credentials(client_id);
-        let mut a = self.store.accounts();
+        // An unreadable accounts.json is left alone (not replaced by an empty list).
+        let Ok(mut a) = self.accounts() else { return };
         if let Some(m) = a.accounts.iter_mut().find(|m| m.client_id == client_id) {
             m.needs_reauth = true;
         }
@@ -232,7 +308,7 @@ impl Siwc {
     /// If `stale_access_token` is `Some`, refresh only when the stored token is still that
     /// value — a concurrent 401 retry may already have refreshed it.
     async fn access_token(&self, stale_access_token: Option<&str>) -> Result<(String, String), SiwcError> {
-        let a = self.store.accounts();
+        let a = self.accounts()?;
         let client_id = a.active.clone().ok_or_else(|| SiwcError::new("signed_out", "ChatGPT にサインインしていません"))?;
         let meta = a.accounts.iter().find(|m| m.client_id == client_id).cloned().ok_or_else(|| SiwcError::new("signed_out", "ChatGPT にサインインしていません"))?;
         let _guard = self.refresh_lock.lock().await;
@@ -309,22 +385,82 @@ impl Siwc {
         }
     }
 
-    /// Revokes the refresh token (best effort with retries), then clears local tokens.
-    /// The account/client mapping and host ID are kept for a later sign-in.
+    /// Signs out of every saved account: revokes each refresh token (best effort with retries),
+    /// then deletes its keychain item. The account/client mapping and host ID are kept for a later
+    /// sign-in. `remote_revoked` is true only if every revocation is known to have happened.
     pub async fn sign_out(&self) -> Result<SignOutResult, SiwcError> {
-        let mut a = self.store.accounts();
-        let Some(client_id) = a.active.clone() else { return Ok(SignOutResult { remote_revoked: true }) };
+        let mut a = self.accounts()?;
         let _guard = self.refresh_lock.lock().await;
-        let creds = self.store.load_credentials(&client_id);
-        let remote_revoked = match creds.as_ref().and_then(|c| c.refresh_token.clone()) {
-            Some(rt) => oauth::revoke(&self.http, &client_id, &rt).await,
-            None => creds.is_none(),
-        };
-        self.store.clear_credentials(&client_id).map_err(|e| SiwcError::new("storage", e))?;
+        let mut remote_revoked = true;
+        let mut first_err = None;
+        for client_id in sign_out_targets(&a) {
+            match self.discard(&client_id).await {
+                Ok(r) => remote_revoked &= r,
+                Err(e) => {
+                    remote_revoked = false;
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
         a.active = None;
         self.store.save_accounts(&a).map_err(|e| SiwcError::new("storage", e))?;
-        Ok(SignOutResult { remote_revoked })
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(SignOutResult { remote_revoked }),
+        }
     }
+}
+
+/// What to do when a sign-in's ID-token subject already has another saved registration.
+/// `drop` lists registrations to revoke, delete from the keychain and remove from `accounts.json`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum SubjectResolution {
+    /// Keep the registration just signed in to (`issued`).
+    KeepNew { drop: Vec<String> },
+    /// Throw away the registration just created and switch to this saved one.
+    UseExisting { client_id: String, drop: Vec<String> },
+}
+
+/// One registration per person (ID-token `sub`).
+///
+/// * A brand-new registration (`is_new`) for someone who already has a usable saved registration
+///   (signed in, and allowing plan usage if the new one does) is discarded in favour of it.
+/// * Otherwise the new/reauthorised registration is kept and every other one for that person is
+///   dropped. This covers re-signing in after a sign-out, when no saved registration has tokens.
+/// * Registrations with an empty subject never match (same rule as the reauth subject check).
+pub(crate) fn resolve_same_subject(
+    accounts: &[AccountMeta],
+    issued: &str,
+    subject: &str,
+    is_new: bool,
+    new_plan: bool,
+    usable: impl Fn(&AccountMeta) -> bool,
+) -> SubjectResolution {
+    if subject.is_empty() {
+        return SubjectResolution::KeepNew { drop: vec![] };
+    }
+    let same: Vec<&AccountMeta> = accounts.iter().filter(|m| !m.subject.is_empty() && m.subject == subject && m.client_id != issued).collect();
+    if is_new {
+        if let Some(keep) = same.iter().find(|m| (m.plan_enabled || !new_plan) && usable(m)) {
+            let mut drop = vec![issued.to_string()];
+            drop.extend(same.iter().filter(|m| m.client_id != keep.client_id).map(|m| m.client_id.clone()));
+            return SubjectResolution::UseExisting { client_id: keep.client_id.clone(), drop };
+        }
+    }
+    SubjectResolution::KeepNew { drop: same.iter().map(|m| m.client_id.clone()).collect() }
+}
+
+/// Every saved registration (and the active one, even if its metadata is missing).
+pub(crate) fn sign_out_targets(a: &store::AccountsFile) -> Vec<String> {
+    let mut ids: Vec<String> = a.accounts.iter().map(|m| m.client_id.clone()).chain(a.active.clone()).collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// Keychain items `accounts.json` doesn't list. Their tokens can't be reached from the app any more.
+pub(crate) fn orphan_items(keychain: &[String], a: &store::AccountsFile) -> Vec<String> {
+    keychain.iter().filter(|id| !a.accounts.iter().any(|m| &m.client_id == *id)).cloned().collect()
 }
 
 /// Whether the stored credentials need a refresh, given the refresh lock is already held.
@@ -368,4 +504,80 @@ mod tests {
         // Still the same stale token: refresh.
         assert!(needs_refresh(&creds("tok-old", 10_000), 1, Some("tok-old")));
     }
+
+    fn meta(client: &str, subject: &str) -> AccountMeta {
+        AccountMeta { client_id: client.into(), subject: subject.into(), plan_enabled: true, ..Default::default() }
+    }
+
+    #[test]
+    fn same_subject_new_registration_uses_existing_signed_in_one() {
+        let accounts = vec![meta("oaiapp_old", "user-1"), meta("oaiapp_other", "user-2")];
+        let r = resolve_same_subject(&accounts, "oaiapp_new", "user-1", true, true, |_| true);
+        assert_eq!(r, SubjectResolution::UseExisting { client_id: "oaiapp_old".into(), drop: vec!["oaiapp_new".into()] });
+    }
+
+    #[test]
+    fn sign_out_covers_every_saved_account() {
+        let a = store::AccountsFile { active: Some("oaiapp_a".into()), accounts: vec![meta("oaiapp_a", "u"), meta("oaiapp_b", "u")], welcome_shown: true };
+        let mut t = sign_out_targets(&a);
+        t.sort();
+        assert_eq!(t, vec!["oaiapp_a".to_string(), "oaiapp_b".to_string()]);
+    }
+
+    #[test]
+    fn orphan_items_are_keychain_entries_missing_from_accounts() {
+        let a = store::AccountsFile { active: None, accounts: vec![meta("oaiapp_a", "u")], welcome_shown: false };
+        let kc = vec!["oaiapp_a".to_string(), "oaiapp_gone".to_string()];
+        assert_eq!(orphan_items(&kc, &a), vec!["oaiapp_gone".to_string()]);
+    }
+
+    #[test]
+    fn same_subject_rules() {
+        let mut no_plan = meta("oaiapp_old", "user-1");
+        no_plan.plan_enabled = false;
+        // Saved one has no tokens (signed out): keep the new one, drop the old.
+        let r = resolve_same_subject(&[meta("oaiapp_old", "user-1")], "oaiapp_new", "user-1", true, true, |_| false);
+        assert_eq!(r, SubjectResolution::KeepNew { drop: vec!["oaiapp_old".into()] });
+        // New one allows plan usage, saved one doesn't: keep the new one.
+        let r = resolve_same_subject(&[no_plan.clone()], "oaiapp_new", "user-1", true, true, |_| true);
+        assert_eq!(r, SubjectResolution::KeepNew { drop: vec!["oaiapp_old".into()] });
+        // Neither allows plan usage: the saved one is enough.
+        let r = resolve_same_subject(&[no_plan], "oaiapp_new", "user-1", true, false, |_| true);
+        assert_eq!(r, SubjectResolution::UseExisting { client_id: "oaiapp_old".into(), drop: vec!["oaiapp_new".into()] });
+        // Different person: nothing to do.
+        let r = resolve_same_subject(&[meta("oaiapp_old", "user-2")], "oaiapp_new", "user-1", true, true, |_| true);
+        assert_eq!(r, SubjectResolution::KeepNew { drop: vec![] });
+        // Empty subjects never match.
+        let r = resolve_same_subject(&[meta("oaiapp_old", "")], "oaiapp_new", "", true, true, |_| true);
+        assert_eq!(r, SubjectResolution::KeepNew { drop: vec![] });
+        let r = resolve_same_subject(&[meta("oaiapp_old", "")], "oaiapp_new", "user-1", true, true, |_| true);
+        assert_eq!(r, SubjectResolution::KeepNew { drop: vec![] });
+    }
+
+    #[test]
+    fn reauth_of_a_saved_registration_keeps_it_and_drops_duplicates() {
+        // accounts.json that already has the same person twice (the state found on a real Mac).
+        let accounts = vec![meta("oaiapp_a", "user-1"), meta("oaiapp_b", "user-1")];
+        let r = resolve_same_subject(&accounts, "oaiapp_a", "user-1", false, true, |_| true);
+        assert_eq!(r, SubjectResolution::KeepNew { drop: vec!["oaiapp_b".into()] });
+        // A new registration on top of two saved ones: use the first usable one, drop the rest.
+        let r = resolve_same_subject(&accounts, "oaiapp_new", "user-1", true, true, |m| m.client_id == "oaiapp_b");
+        assert_eq!(r, SubjectResolution::UseExisting { client_id: "oaiapp_b".into(), drop: vec!["oaiapp_new".into(), "oaiapp_a".into()] });
+    }
+
+    #[test]
+    fn sign_out_with_no_active_account_still_covers_saved_ones() {
+        let a = store::AccountsFile { active: None, accounts: vec![meta("oaiapp_a", "u")], welcome_shown: true };
+        assert_eq!(sign_out_targets(&a), vec!["oaiapp_a".to_string()]);
+        assert!(sign_out_targets(&store::AccountsFile::default()).is_empty());
+    }
+
+    #[test]
+    fn no_orphans_when_every_item_is_known() {
+        let a = store::AccountsFile { active: None, accounts: vec![meta("oaiapp_a", "u"), meta("oaiapp_b", "v")], welcome_shown: false };
+        assert!(orphan_items(&["oaiapp_a".to_string(), "oaiapp_b".to_string()], &a).is_empty());
+        // No accounts.json (fresh data folder): every item is unreachable.
+        assert_eq!(orphan_items(&["oaiapp_a".to_string()], &store::AccountsFile::default()), vec!["oaiapp_a".to_string()]);
+    }
 }
+
