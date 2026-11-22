@@ -93,8 +93,8 @@ export function Treemap({ rows, mode, focus, selected, onFocus, onToggle, onDril
               style={{ left: t.x + GAP / 2, top: t.y + GAP / 2, width: w, height: h }}
               onFocus={() => onFocus(r.path)}
               onClick={(e) => {
-                // A mouse click shows the detail. A click with detail 0 is not from a mouse but from assistive
-                // technology pressing the checkbox (e.g. VoiceOver), so it toggles like Space does.
+                // A mouse click shows the detail. A click with detail 0 is not from a mouse; it is expected to come from
+                // assistive technology pressing the checkbox, so it toggles like Space does (not checked with VoiceOver).
                 if (e.detail === 0 && t.selectable) onToggle(r.path);
                 else onFocus(r.path);
               }}
