@@ -13,8 +13,8 @@ interface Props {
 /**
  * App-bar button that opens the account / model panel (#13 proposal). Only the initial is shown so the
  * stepper stays near the middle of the bar; the full label is in the tooltip and the panel. The panel used to sit in a
- * right sidebar on steps 1-3. Built with React state instead of the HTML `popover` attribute
- * because the app supports macOS 12, whose WebKit predates it.
+ * right sidebar on steps 1-3. Built with React state instead of the HTML `popover` attribute: that
+ * attribute needs the WebKit of Safari 17 or later, and macOS 12 (the minimum) ships with Safari 15.
  */
 export function AccountMenu(p: Props) {
   const [open, setOpen] = useState(false);
