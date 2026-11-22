@@ -22,7 +22,7 @@ export const chatGptProvider: JudgeProvider = {
     options.signal?.addEventListener("abort", cancel, { once: true });
     try {
       if (options.signal?.aborted) throw new Error("中止しました");
-      const text = await api.siwcRespond(requestId, options.model, INSTRUCTIONS, buildInput(items));
+      const text = await api.siwcRespond(requestId, options.clientId, options.model, INSTRUCTIONS, buildInput(items));
       return parseJudgements(text, new Set(items.map((i) => i.id)));
     } finally {
       options.signal?.removeEventListener("abort", cancel);
