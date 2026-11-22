@@ -316,6 +316,18 @@ export default function App() {
     });
   }, [view]);
 
+  // Each step's page is re-created (key={flow.step}), so the focused control disappears and focus falls back to
+  // <body>. Move it to the new step's title in the top bar instead (#43). Not on the first render, and not away
+  // from the sidebar or a dialog the user is working in.
+  const shownStep = useRef(flow.step);
+  useEffect(() => {
+    if (shownStep.current === flow.step) return;
+    shownStep.current = flow.step;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.closest(".sidebar, [role=dialog]")) return;
+    barSlot?.querySelector<HTMLElement>(".topbar-title")?.focus();
+  }, [flow.step, barSlot]);
+
   const chosen = view.filter((r) => selected.has(r.path) && selectable(r.final));
 
   async function doTrash() {
