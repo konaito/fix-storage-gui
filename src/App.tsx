@@ -228,7 +228,7 @@ export default function App() {
 
   function goUp() {
     const prev = history[history.length - 1];
-    if (!prev) return;
+    if (!prev || blockedByUpdate()) return;
     setHistory((h) => h.slice(0, -1));
     void runScan(prev, false);
   }
@@ -379,6 +379,7 @@ export default function App() {
           minSize={minSize}
           onMinSize={setMinSize}
           onStart={() => {
+            if (blockedByUpdate()) return;
             setHistory([]);
             void runScan(target, false);
           }}
@@ -420,6 +421,7 @@ export default function App() {
           canGoUp={history.length > 0}
           onGoUp={goUp}
           onDrill={(path) => {
+            if (blockedByUpdate()) return;
             setTarget({ kind: "folder", path });
             void runScan({ kind: "folder", path }, true);
           }}
