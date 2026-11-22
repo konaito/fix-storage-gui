@@ -156,8 +156,8 @@ fn du(path: &str, cancel: &AtomicBool) -> DuResult {
     DuResult { bytes: kb * 1024, denied: stalled || stderr_denied }
 }
 
-/// Most entries `has_outside_hard_links` reads in one folder before it stops (#34).
-const HARD_LINK_SCAN_CAP: usize = 20_000;
+/// Most entries `has_outside_hard_links` reads in one folder before it stops (#34, #79).
+const HARD_LINK_SCAN_CAP: usize = 50_000;
 
 /// A loose file whose blocks are shared with another path (more than one hard link).
 fn is_hard_linked(meta: &fs::Metadata) -> bool {
