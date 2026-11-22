@@ -59,8 +59,7 @@ fn protected_paths(home: &str, roots: &[Root]) -> Vec<String> {
             lib("Safari"),
             lib("Photos"),
             lib("Biome"),
-        ]
-        .into_iter(),
+        ],
     );
     v
 }

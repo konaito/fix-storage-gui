@@ -46,6 +46,7 @@ pub struct Discovery {
     pub revocation_endpoint: Option<String>,
 }
 
+#[allow(clippy::result_large_err)]
 pub async fn discovery(http: &reqwest::Client) -> Result<Discovery, SiwcError> {
     let res = http.get(format!("{ISSUER}/.well-known/openid-configuration")).send().await.map_err(SiwcError::network)?;
     let d: Discovery = res.json().await.map_err(|_| SiwcError::new("discovery_failed", "サインイン設定を確認できませんでした"))?;
@@ -105,6 +106,7 @@ pub fn authorize_url(r: &AuthRequest) -> String {
 }
 
 /// Binds the loopback listener: 127.0.0.1:1455 if free, otherwise any free port (only the port may vary).
+#[allow(clippy::result_large_err)]
 pub fn bind_loopback() -> Result<(TcpListener, String), SiwcError> {
     let listener = TcpListener::bind(("127.0.0.1", PREFERRED_PORT))
         .or_else(|_| TcpListener::bind(("127.0.0.1", 0)))
@@ -138,6 +140,7 @@ pub fn parse_callback_request(first_line: &str) -> Option<HashMap<String, String
 }
 
 /// Waits (blocking) for the browser to hit the callback. Ignores other paths such as /favicon.ico.
+#[allow(clippy::result_large_err)]
 pub fn wait_for_callback(listener: TcpListener, cancel: Arc<AtomicBool>, timeout: Duration) -> Result<HashMap<String, String>, SiwcError> {
     listener.set_nonblocking(true).map_err(|e| SiwcError::new("callback_failed", e.to_string()))?;
     let start = Instant::now();
@@ -206,6 +209,7 @@ pub fn oauth_error_code(body: &str) -> Option<String> {
     }
 }
 
+#[allow(clippy::result_large_err)]
 async fn token_request(http: &reqwest::Client, form: &[(&str, &str)]) -> Result<TokenResponse, SiwcError> {
     let res = http.post(TOKEN_URL).form(form).send().await.map_err(SiwcError::network)?;
     let status = res.status().as_u16();
@@ -222,6 +226,7 @@ async fn token_request(http: &reqwest::Client, form: &[(&str, &str)]) -> Result<
     serde_json::from_str(&body).map_err(|_| SiwcError::new("token_failed", "トークン応答を読めませんでした"))
 }
 
+#[allow(clippy::result_large_err)]
 pub async fn exchange_code(http: &reqwest::Client, client_id: &str, code: &str, verifier: &str, redirect_uri: &str) -> Result<TokenResponse, SiwcError> {
     token_request(
         http,
@@ -238,6 +243,7 @@ pub async fn exchange_code(http: &reqwest::Client, client_id: &str, code: &str, 
 }
 
 /// Refresh without `scope` so the existing grant is kept.
+#[allow(clippy::result_large_err)]
 pub async fn refresh(http: &reqwest::Client, client_id: &str, refresh_token: &str) -> Result<TokenResponse, SiwcError> {
     token_request(http, &[("grant_type", "refresh_token"), ("client_id", client_id), ("refresh_token", refresh_token), ("resource", RESOURCE)]).await
 }
@@ -271,6 +277,7 @@ pub struct IdClaims {
 }
 
 /// Verifies signature (JWKS), issuer, audience (= issued client id), expiry and nonce.
+#[allow(clippy::result_large_err)]
 pub async fn verify_id_token(http: &reqwest::Client, id_token: &str, client_id: &str, nonce: Option<&str>) -> Result<IdClaims, SiwcError> {
     use jsonwebtoken::{decode, decode_header, jwk::JwkSet, Algorithm, DecodingKey, Validation};
     let unavailable = || SiwcError::new("identity_unavailable", "本人確認を一時的に行えません。少し待ってからもう一度試してください");

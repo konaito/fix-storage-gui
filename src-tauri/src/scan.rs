@@ -63,7 +63,7 @@ pub fn disk_space() -> Option<DiskSpace> {
         let c = std::ffi::CString::new(path).ok()?;
         let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::statvfs(c.as_ptr(), &mut s) } == 0 {
-            let frsize = s.f_frsize as u64;
+            let frsize = s.f_frsize;
             return Some(DiskSpace { total: s.f_blocks as u64 * frsize, available: s.f_bavail as u64 * frsize });
         }
     }
@@ -255,7 +255,7 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
             let start: Vec<String> = roots.iter().map(|r| r.path.clone()).collect();
             collect_units(&start, &roots, &root_paths, true, &mut denied, &*on_progress)
         }
-        Some(folder) => collect_units(&[folder.clone()], &roots, &root_paths, false, &mut denied, &*on_progress),
+        Some(folder) => collect_units(std::slice::from_ref(folder), &roots, &root_paths, false, &mut denied, &*on_progress),
     };
 
     let total = units.len();
@@ -296,7 +296,7 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
 
     let mut list = std::mem::take(&mut *measured.lock().unwrap());
     list.retain(|(_, size, _)| *size >= opts.min_size);
-    list.sort_by(|a, b| b.1.cmp(&a.1));
+    list.sort_by_key(|b| std::cmp::Reverse(b.1));
     list.truncate(opts.limit);
 
     let paths: Vec<String> = list.iter().map(|(p, _, _)| p.clone()).collect();

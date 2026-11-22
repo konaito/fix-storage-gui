@@ -138,11 +138,13 @@ struct SiwcChanged {
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 fn siwc_status(state: State<'_, AppState>) -> Result<siwc::Status, SiwcError> {
     state.siwc.status()
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 async fn siwc_sign_in(app: tauri::AppHandle, state: State<'_, AppState>, client_id: Option<String>, prompt_consent: bool) -> Result<siwc::AccountView, SiwcError> {
     let opener = app.clone();
     let res = state
@@ -161,6 +163,7 @@ fn siwc_cancel_sign_in(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 fn siwc_switch(app: tauri::AppHandle, state: State<'_, AppState>, client_id: String) -> Result<(), SiwcError> {
     state.siwc.switch_account(&client_id)?;
     notify_siwc_changed(&app, "switched", None);
@@ -168,11 +171,13 @@ fn siwc_switch(app: tauri::AppHandle, state: State<'_, AppState>, client_id: Str
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 fn siwc_ack_welcome(state: State<'_, AppState>) -> Result<(), SiwcError> {
     state.siwc.ack_welcome()
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 async fn siwc_sign_out(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<siwc::SignOutResult, SiwcError> {
     let res = state.siwc.sign_out().await?;
     notify_siwc_changed(&app, "signed_out", Some(res.remote_revoked));
@@ -180,6 +185,7 @@ async fn siwc_sign_out(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 async fn siwc_models(state: State<'_, AppState>) -> Result<Vec<siwc::api::Model>, SiwcError> {
     state.siwc.models().await
 }
@@ -192,6 +198,7 @@ struct AiProgress {
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 async fn siwc_respond(app: tauri::AppHandle, state: State<'_, AppState>, request_id: String, model: String, instructions: String, input: String) -> Result<String, SiwcError> {
     let on_delta = move |chars: usize| {
         let _ = app.emit("ai-progress", AiProgress { request_id: request_id.clone(), chars });

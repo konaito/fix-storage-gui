@@ -64,6 +64,7 @@ pub fn http_error(status: u16, request_id: Option<String>, body: &str) -> SiwcEr
     SiwcError { kind: kind.into(), code, param, status: Some(status), request_id, message }
 }
 
+#[allow(clippy::result_large_err)]
 pub async fn list_models(http: &reqwest::Client, token: &str) -> Result<Vec<Model>, SiwcError> {
     let res = http.get(MODELS_URL).bearer_auth(token).send().await.map_err(SiwcError::network)?;
     let status = res.status().as_u16();
@@ -188,6 +189,7 @@ fn output_text(response: &Value) -> String {
 }
 
 /// Streams one request to completion. Success only after `response.completed`.
+#[allow(clippy::result_large_err)]
 pub async fn respond(
     http: &reqwest::Client,
     token: &str,

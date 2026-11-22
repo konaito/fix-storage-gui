@@ -73,6 +73,7 @@ impl Siwc {
         Self { store: Store::new(dir), http, refresh_lock: tokio::sync::Mutex::new(()), sign_in_cancel: std::sync::Mutex::new(None) }
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn status(&self) -> Result<Status, SiwcError> {
         let host_id = self.store.host_id().map_err(|e| SiwcError::new("storage", e))?;
         let a = self.store.accounts();
@@ -92,6 +93,7 @@ impl Siwc {
         Ok(Status { host_id, active: a.active.clone(), accounts, show_welcome: active_plan && !a.welcome_shown })
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn ack_welcome(&self) -> Result<(), SiwcError> {
         let mut a = self.store.accounts();
         a.welcome_shown = true;
@@ -104,6 +106,7 @@ impl Siwc {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn switch_account(&self, client_id: &str) -> Result<(), SiwcError> {
         let mut a = self.store.accounts();
         if !a.accounts.iter().any(|m| m.client_id == client_id) {
@@ -115,6 +118,7 @@ impl Siwc {
 
     /// Runs the whole browser sign-in. `client_id = None` registers a new client
     /// (`dynamic_agent_client`); otherwise reauthorises that saved registration.
+    #[allow(clippy::result_large_err)]
     pub async fn sign_in(&self, client_id: Option<String>, prompt_consent: bool, open_browser: impl FnOnce(&str) -> Result<(), String>) -> Result<AccountView, SiwcError> {
         let host_id = self.store.host_id().map_err(|e| SiwcError::new("storage", e))?;
         let accounts = self.store.accounts();
@@ -145,6 +149,7 @@ impl Siwc {
         *self.sign_in_cancel.lock().unwrap() = Some(cancel.clone());
         // Listener is already bound, so it is safe to open the browser now.
         open_browser(&url).map_err(|e| SiwcError::new("browser", format!("ブラウザを開けません: {e}")))?;
+        #[allow(clippy::result_large_err)]
         let params = tokio::task::spawn_blocking(move || oauth::wait_for_callback(listener, cancel, Duration::from_secs(600)))
             .await
             .map_err(|e| SiwcError::new("callback_failed", e.to_string()))??;
@@ -231,6 +236,7 @@ impl Siwc {
     /// Refreshes are serialised (`refresh_lock`) so a rotating refresh token is never used twice.
     /// If `stale_access_token` is `Some`, refresh only when the stored token is still that
     /// value — a concurrent 401 retry may already have refreshed it.
+    #[allow(clippy::result_large_err)]
     async fn access_token(&self, stale_access_token: Option<&str>) -> Result<(String, String), SiwcError> {
         let a = self.store.accounts();
         let client_id = a.active.clone().ok_or_else(|| SiwcError::new("signed_out", "ChatGPT にサインインしていません"))?;
@@ -283,6 +289,7 @@ impl Siwc {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub async fn models(&self) -> Result<Vec<api::Model>, SiwcError> {
         let (_, token) = self.access_token(None).await?;
         match api::list_models(&self.http, &token).await {
@@ -297,6 +304,7 @@ impl Siwc {
     /// Streams one Responses API request. Concurrent calls are supported: each has its own
     /// HTTP stream, and `siwc_respond` does not take a global lock around inference.
     /// Token refresh is single-flight (see `access_token`).
+    #[allow(clippy::result_large_err)]
     pub async fn respond(&self, model: &str, instructions: &str, input: &str, on_delta: impl FnMut(usize) + Clone) -> Result<String, SiwcError> {
         let (_, token) = self.access_token(None).await?;
         match api::respond(&self.http, &token, model, instructions, input, on_delta.clone()).await {
@@ -311,6 +319,7 @@ impl Siwc {
 
     /// Revokes the refresh token (best effort with retries), then clears local tokens.
     /// The account/client mapping and host ID are kept for a later sign-in.
+    #[allow(clippy::result_large_err)]
     pub async fn sign_out(&self) -> Result<SignOutResult, SiwcError> {
         let mut a = self.store.accounts();
         let Some(client_id) = a.active.clone() else { return Ok(SignOutResult { remote_revoked: true }) };
