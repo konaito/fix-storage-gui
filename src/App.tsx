@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { AppIcon } from "./components/AppIcon";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { chatGptProvider } from "./ai/chatgpt";
@@ -459,9 +460,7 @@ export default function App() {
     <div className="app">
       <header className="app-bar">
         <div className="brand">
-          <div className="app-icon" aria-hidden="true">
-            ◐
-          </div>
+          <AppIcon />
           <div>
             <h1>Fix Storage</h1>
             {env && <div className="version">v{env.version}</div>}
