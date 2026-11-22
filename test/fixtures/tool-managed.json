@@ -1,0 +1,23 @@
+{
+  "note": "Paths that src/cli-core/classify.ts calls \"system\" (things a tool owns) must also be refused by the Rust hard block (src-tauri/src/safety.rs), and the others must be allowed by both. test/toolManaged.test.ts and safety.rs read this same file. The home folder is /Users/a.",
+  "system": [
+    { "path": "/Users/a/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw", "dir": false },
+    { "path": "/Users/a/Library/Containers/com.docker.docker/Data/vms", "dir": true },
+    { "path": "/Users/a/VMs/Docker.raw", "dir": false },
+    { "path": "/Users/a/.ollama/models", "dir": true },
+    { "path": "/Users/a/.ollama/models/blobs/sha256-abc", "dir": false },
+    { "path": "/opt/homebrew/Cellar/node", "dir": true },
+    { "path": "/usr/local/Cellar/git", "dir": true },
+    { "path": "/home/linuxbrew/.linuxbrew/Cellar/git", "dir": true },
+    { "path": "/Users/a/.local/share/docker/volumes", "dir": true },
+    { "path": "/Users/a/.local/share/containers/storage", "dir": true },
+    { "path": "/Users/a/.local/share/flatpak/repo", "dir": true },
+    { "path": "/var/lib/docker/overlay2", "dir": true }
+  ],
+  "notSystem": [
+    { "path": "/Users/a/.ollama/history", "dir": false },
+    { "path": "/Users/a/Library/Containers/com.example.app/Data/x.db", "dir": false },
+    { "path": "/Users/a/Documents/docker-notes.txt", "dir": false },
+    { "path": "/Users/a/.local/share/fonts", "dir": true }
+  ]
+}
