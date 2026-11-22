@@ -3,6 +3,7 @@ import type { AccountView, Model, SiwcStatus } from "../lib/api";
 interface Props {
   status: SiwcStatus | null;
   models: Model[];
+  modelsLoading?: boolean;
   model: string;
   onModel: (slug: string) => void;
   signingIn: boolean;
@@ -22,7 +23,11 @@ export function AccountPanel(p: Props) {
   if (p.signingIn) {
     return (
       <div className="card account">
-        <p>ブラウザで ChatGPT にサインインしてください…</p>
+        <div className="row">
+          <span className="spinner tiny-spin" role="status" aria-label="サインイン待ち" />
+          <strong>ブラウザで ChatGPT にサインインしてください…</strong>
+        </div>
+        <p className="muted small">サインインが終わると自動でこの画面に戻ります。</p>
         <button onClick={p.onCancelSignIn}>中止</button>
       </div>
     );
@@ -85,7 +90,7 @@ export function AccountPanel(p: Props) {
           <label>
             モデル{" "}
             <select value={p.model} onChange={(e) => p.onModel(e.target.value)} disabled={p.models.length === 0}>
-              {p.models.length === 0 && <option value="">（モデル一覧を取得できていません）</option>}
+              {p.models.length === 0 && <option value="">{p.modelsLoading ? "取得中…" : "（モデル一覧を取得できていません）"}</option>}
               {p.models.map((m) => (
                 <option key={m.slug} value={m.slug}>
                   {m.displayName}
@@ -93,9 +98,13 @@ export function AccountPanel(p: Props) {
               ))}
             </select>
           </label>
-          <button className="link" onClick={p.onReloadModels}>
-            再読み込み
-          </button>
+          {p.modelsLoading ? (
+            <span className="spinner tiny-spin" role="status" aria-label="モデル一覧を取得中" />
+          ) : (
+            <button className="link" onClick={p.onReloadModels}>
+              再読み込み
+            </button>
+          )}
           <span className="plan-badge">ChatGPT プランを使用中</span>
           <button className="link" onClick={p.onManageUsage}>
             使用量を管理
