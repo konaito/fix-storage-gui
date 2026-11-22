@@ -191,13 +191,16 @@ export function flowReducer(s: FlowState, e: FlowEvent): FlowState {
 
 export type StepStatus = "done" | "current" | "upcoming" | "skipped";
 
-/** How a step looks in the progress indicator. Without aiFirst the AI step is optional and shows as skipped when passed over. */
+/**
+ * How a step looks in the progress indicator. Without aiFirst the AI step is optional and shows as skipped when passed over.
+ * With aiFirst it shows as skipped when the list was opened with the rules' verdict and the AI judged nothing (#81).
+ */
 export function stepStatus(s: FlowState, id: StepId): StepStatus {
   const cur = index(s, s.step);
   const i = index(s, id);
   if (i === cur) return "current";
   if (id === "ai" && s.aiDone) return "done";
-  if (i < cur) return id === "ai" && !s.aiDone && !s.aiFirst ? "skipped" : "done";
+  if (i < cur) return id === "ai" && !s.aiDone && (!s.aiFirst || s.ruleOnly) ? "skipped" : "done";
   // Going back to review after a finished trash keeps earlier work visible as done.
   if (id === "scanning" && s.hasScan) return "done";
   return "upcoming";
