@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<!--
+  X（Twitter）と OGP のカード画像の原本。1200×630 で描き、render.sh で site/og-image.png に書き出す。
+  色と書体は site/styles.css の :root と同じ値を使う。
+-->
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        --navy: #1c2740;
+        --ink: #161b26;
+        --muted: #5a6273;
+        --line: #d8d4cb;
+        --paper: #f4f1ea;
+        --card: #fffcf7;
+        --accent: #3c6fe0;
+        --seg-b: #4a86f5;
+        --seg-g: #3dce6e;
+        --seg-p: #ef5aa8;
+        --seg-o: #f59a3c;
+        --seg-s: #9aa3b0;
+        --font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", sans-serif;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { width: 1200px; height: 630px; overflow: hidden; }
+      body {
+        font-family: var(--font);
+        color: var(--ink);
+        background:
+          radial-gradient(900px 520px at 18% 30%, rgba(60, 111, 224, 0.12), transparent 70%),
+          var(--paper);
+        position: relative;
+      }
+      .frame {
+        position: absolute;
+        inset: 28px;
+        border-radius: 28px;
+        background: var(--card);
+        border: 2px solid var(--line);
+        box-shadow: 0 16px 40px rgba(20, 28, 48, 0.1);
+        display: flex;
+        align-items: center;
+        gap: 56px;
+        padding: 0 72px 0 80px;
+      }
+      .icon {
+        flex: none;
+        width: 220px;
+        height: 220px;
+        border-radius: 49px;
+        box-shadow: 0 20px 44px rgba(20, 28, 48, 0.22);
+      }
+      .text { display: flex; flex-direction: column; gap: 26px; min-width: 0; }
+      .kicker {
+        align-self: flex-start;
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--accent);
+        background: rgba(60, 111, 224, 0.1);
+        border-radius: 999px;
+        padding: 8px 20px;
+        letter-spacing: 0.02em;
+      }
+      h1 {
+        font-size: 58px;
+        line-height: 1.3;
+        white-space: nowrap;
+        font-weight: 800;
+        color: var(--navy);
+        letter-spacing: -0.01em;
+      }
+      .bar {
+        display: flex;
+        width: 520px;
+        height: 30px;
+        padding: 4px;
+        border-radius: 999px;
+        background: #fff;
+        box-shadow: 0 0 0 3px var(--navy);
+        overflow: hidden;
+      }
+      .bar span { display: block; height: 100%; }
+      .bar span:first-child { border-radius: 999px 0 0 999px; }
+      .bar span:last-child { border-radius: 0 999px 999px 0; }
+      .meta {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        font-size: 26px;
+        font-weight: 700;
+        color: var(--navy);
+      }
+      .meta small {
+        font-size: 22px;
+        font-weight: 600;
+        color: var(--muted);
+      }
+      .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <img class="icon" src="../../app-icon.png" alt="" />
+      <div class="text">
+        <p class="kicker">Sign in with ChatGPT のデモアプリ</p>
+        <h1>重いファイルを見つけて、<br />安全にゴミ箱へ。</h1>
+        <div class="bar" aria-hidden="true">
+          <span style="flex: 3.2; background: var(--seg-b)"></span>
+          <span style="flex: 2.4; background: var(--seg-g)"></span>
+          <span style="flex: 1.5; background: var(--seg-p)"></span>
+          <span style="flex: 2.6; background: var(--seg-o)"></span>
+          <span style="flex: 0.9; background: var(--seg-s)"></span>
+        </div>
+        <p class="meta">Fix Storage GUI<span class="dot"></span><small>macOS 専用・完全削除はしない</small></p>
+      </div>
+    </div>
+  </body>
+</html>
