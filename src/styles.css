@@ -165,7 +165,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .notice { background: var(--accent-soft); color: var(--text); }
 
 /* ---------- Stepper ---------- */
-.stepper { flex: none; background: var(--bg-elev); border-bottom: 1px solid var(--line); padding: 10px 24px; }
+.stepper { flex: none; background: var(--bg-elev); border-bottom: 1px solid var(--line); padding: 10px 24px; container-type: inline-size; container-name: stepper; }
 .stepper ol { list-style: none; margin: 0 auto; padding: 0; display: flex; gap: 4px; max-width: 1392px; overflow-x: auto; }
 .step { flex: 1; min-width: 0; position: relative; }
 .step + .step::before { content: ""; position: absolute; left: -2px; top: 50%; width: 4px; height: 1px; background: var(--line-strong); }
@@ -179,7 +179,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
   flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
   font-size: 12px; font-weight: 700; border: 1.5px solid var(--line-strong); color: var(--text-3); background: var(--bg-elev);
 }
-.step-label { font-size: 12px; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; }
+.step-label { font-size: 12px; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.step-label-short { display: none; }
+/* The stepper is narrower than the window (brand + tools sit beside it), so switch on its own width. */
+@container stepper (max-width: 1100px) {
+  .step-label-full { display: none; }
+  .step-label-short { display: inline; }
+}
 .step .opt { font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--bg-sunken); color: var(--text-3); }
 .step.current button { background: var(--accent-soft); color: var(--text); }
 .step.current .dot { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -187,7 +193,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .step.done button { color: var(--text-2); }
 .step.done .dot { background: var(--ok); border-color: var(--ok); color: #fff; }
 .step.skipped .dot { border-style: dashed; }
-@media (max-width: 1100px) { .step:not(.current) .step-label { display: none; } .step { flex: none; } .step.current { flex: 1; } }
+@media (max-width: 640px) { .step:not(.current) .step-label { display: none; } .step { flex: none; } .step.current { flex: 1; } }
 
 /* ---------- Top action bar (components/ActionBar.tsx) ----------
    Title + one-line explanation on the left, status in the middle, actions on the right with the
@@ -419,14 +425,14 @@ details summary { cursor: pointer; }
 .tile {
   position: absolute; border-radius: 10px; background: var(--tile); color: var(--tile-text); cursor: pointer; overflow: hidden;
   transition: background 0.12s, box-shadow 0.12s, transform 0.08s; outline: none;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 .tile:hover { background: var(--tile-hover); }
-.tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; }
-.tile.safe::before { background: var(--tile-safe); }
-.tile.caution::before { background: var(--tile-caution); }
+/* Verdict is the fill colour itself (no left-edge stripe). Locked tiles keep the diagonal stripes. */
+.tile.safe { background: #2f9e4a; }
+.tile.safe:hover { background: #35ad52; }
+.tile.caution { background: #c47f12; }
+.tile.caution:hover { background: #d48b18; }
 .tile.keep { background: #4a4f63; }
-.tile.keep::before { background: var(--tile-keep); opacity: 0.7; }
 .tile.locked {
   background: repeating-linear-gradient(135deg, #3d4252 0 8px, #373b4a 8px 16px); color: rgba(255, 255, 255, 0.6); cursor: default;
 }
@@ -435,7 +441,7 @@ details summary { cursor: pointer; }
 .tile.focus { box-shadow: 0 0 0 2px #fff, 0 0 0 5px rgba(10, 132, 255, 0.6); z-index: 3; }
 .tile:focus-visible { box-shadow: 0 0 0 2px #fff; z-index: 3; }
 .tile.on { background: #1f7a43; }
-.tile.on::before { background: #fff; opacity: 0.85; }
+.tile.on:hover { background: #218a4b; }
 .tile-body {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   padding: 6px 8px; text-align: center; pointer-events: none;
