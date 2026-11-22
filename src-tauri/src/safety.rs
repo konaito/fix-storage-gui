@@ -276,13 +276,21 @@ const GIT_SEARCH_DEPTH: usize = 3;
 const GIT_SEARCH_ENTRIES: usize = 2000;
 
 /// Whether a `.git` (folder or file, any case) is in `dir` or in a folder up to [`GIT_SEARCH_DEPTH`]
-/// levels below it. Breadth first, so shallow repositories are found first. Links are not followed,
-/// folders that cannot be read are skipped, folders for which `skip` is true are not entered, and
-/// after [`GIT_SEARCH_ENTRIES`] entries the search stops and answers false.
+/// levels below it. Breadth first: every folder of a level is first asked for `.git` directly (not
+/// counted), and only then are the folders listed, so a big folder cannot hide a repository next to it.
+/// Links met on the way down are not followed, folders that cannot be read are skipped, folders for
+/// which `skip` is true are not entered, and after [`GIT_SEARCH_ENTRIES`] listed entries the search
+/// stops and answers false.
 fn holds_git_repo(dir: &Path, skip: impl Fn(&str) -> bool) -> bool {
     let mut level = vec![dir.to_path_buf()];
     let mut seen = 0usize;
     for depth in 0..=GIT_SEARCH_DEPTH {
+        if level.iter().any(|d| d.join(".git").symlink_metadata().is_ok()) {
+            return true;
+        }
+        if depth == GIT_SEARCH_DEPTH {
+            break;
+        }
         let mut next = Vec::new();
         for d in &level {
             let Ok(entries) = std::fs::read_dir(d) else { continue };
@@ -294,7 +302,7 @@ fn holds_git_repo(dir: &Path, skip: impl Fn(&str) -> bool) -> bool {
                 if e.file_name().to_string_lossy().eq_ignore_ascii_case(".git") {
                     return true;
                 }
-                if depth < GIT_SEARCH_DEPTH && e.file_type().is_ok_and(|t| t.is_dir()) {
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
                     let child = e.path();
                     if child.to_str().is_none_or(|s| !skip(s)) {
                         next.push(child);
@@ -371,7 +379,9 @@ impl Guard {
             if p.join(".git").exists() {
                 return Some("Git リポジトリ（未 push の変更が失われるおそれ）".into());
             }
-            if !real.rebuilt(&resolved) && holds_git_repo(p, |s| real.rebuilt(s)) {
+            // A link is moved by itself, never what it points to, so only real folders are searched.
+            let real_dir = std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
+            if real_dir && !real.rebuilt(&resolved) && holds_git_repo(p, |s| real.rebuilt(s)) {
                 return Some("Git リポジトリを含むフォルダ（未 push の変更が失われるおそれ）".into());
             }
         }
@@ -557,7 +567,40 @@ mod tests {
         assert!(c(format!("{h}/upper")).is_some(), ".GIT in another case");
         assert!(c(format!("{h}/plain")).is_none(), "no repository inside");
         assert!(c(format!("{h}/links")).is_none(), "links are not followed");
+        symlink(d.join("work"), d.join("worklink")).unwrap();
+        assert!(c(format!("{h}/worklink")).is_none(), "an item that is a link is not searched");
         assert!(c(format!("{h}/.cache/pre-commit")).is_none(), "caches are not searched");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #32: a big folder next to a repository must not use up the search before the repository is seen.
+    #[test]
+    fn big_sibling_does_not_hide_a_repo() {
+        let (d, h) = real_home("gitbig");
+        let roots = mac_roots(&h);
+        let c = |p: String| cannot_remove(&p, &h, &roots, true);
+        for name in ["photos", "a", "m", "z", "0"] {
+            std::fs::create_dir_all(d.join(format!("stuff/{name}"))).unwrap();
+            for i in 0..(GIT_SEARCH_ENTRIES / 4) {
+                std::fs::write(d.join(format!("stuff/{name}/{i}.jpg")), b"").unwrap();
+            }
+        }
+        std::fs::create_dir_all(d.join("stuff/repo/.git")).unwrap();
+        assert!(c(format!("{h}/stuff")).is_some(), "repository next to big folders");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #32: past the entry limit the search gives up and allows the folder.
+    #[test]
+    fn git_search_gives_up_past_the_limit() {
+        let (d, h) = real_home("gitlimit");
+        let roots = mac_roots(&h);
+        std::fs::create_dir_all(d.join("big/flat")).unwrap();
+        for i in 0..=GIT_SEARCH_ENTRIES {
+            std::fs::write(d.join(format!("big/flat/{i}.txt")), b"").unwrap();
+        }
+        std::fs::create_dir_all(d.join("big/flat/x/y/.git")).unwrap();
+        assert!(cannot_remove(&format!("{h}/big"), &h, &roots, true).is_none());
         let _ = std::fs::remove_dir_all(&d);
     }
 
