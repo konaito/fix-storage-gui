@@ -2,6 +2,7 @@
 
 Mac のストレージを圧迫している重いファイル・フォルダを見つけて、安全に「ゴミ箱へ移動」するための GUI アプリです（Tauri v2）。**macOS 専用**です（Apple Silicon / Intel 両対応の universal ビルド）。Windows・Linux には対応していません。
 AI 判定は **Sign in with ChatGPT** を使い、あなたの ChatGPT プランの使用量で動きます（API キー不要）。
+起動時に ChatGPT でのサインインが必要です。プランの利用を許可しなかった場合は、元 CLI のルールとハードブロックだけの判定で使えます（その場合、OpenAI には何も送りません）。
 
 紹介ページ（GitHub Pages）: https://konaito.github.io/fix-storage-gui/
 
@@ -12,8 +13,8 @@ AI 判定は **Sign in with ChatGPT** を使い、あなたの ChatGPT プラン
 ## できること
 
 1. **スキャン対象を選ぶ**: 「Mac 全体（元 CLI と同じフォルダ群）」か、任意のフォルダ。
-2. **重いもの一覧**: サイズ順に、最終使用日（Spotlight の `kMDItemLastUsedDate`）、更新日、元 CLI のカテゴリと判定を表示。フォルダは「中を見る」で掘り下げられます。
-3. **AI 判定**: 「削除していい / 注意 / 消しちゃダメ」と理由を日本語で表示。
+2. **重いもの一覧**: サイズに比例したツリーマップ（表形式にも切り替え可）。サイズ、最終使用日（Spotlight の `kMDItemLastUsedDate`）、更新日、元 CLI のカテゴリと判定を表示します。AI 判定のあとは「削除していい」ものを優先して並べます。項目を選ぶと右側に詳細（判定と理由、種類、サイズ、場所、日付）と、この Mac の中だけで作るプレビューが出ます（保護対象や鍵らしいファイルは中身を開きません）。フォルダは「中を見る」で掘り下げられます。
+3. **AI 判定**: 「削除していい / 注意 / 消しちゃダメ」と理由を日本語で表示。25 件ずつのバッチを最大 3 本まで同時に送ります。
 4. **ゴミ箱へ移動**: 選んだものを最終確認ダイアログのあとでゴミ箱へ移動します。**完全削除はしません**（Finder の「戻す」で戻せます）。
 
 ## 安全のための仕組み
@@ -87,8 +88,9 @@ src-tauri/src/
 1. [Releases](https://github.com/konaito/fix-storage-gui/releases) の最新版から `fix-storage-gui_<バージョン>_universal.dmg` をダウンロードします（main の最新ビルドは [Actions の Build macOS](https://github.com/konaito/fix-storage-gui/actions/workflows/build-macos.yml) の artifact `fix-storage-gui-macos-universal-dmg` にもあります。こちらは GitHub へのログインが必要です）。
 2. `.dmg` を開き、`Fix Storage GUI.app` を「アプリケーション」へドラッグします。
 3. 未署名・未公証版の場合は、下の「未署名・未公証アプリの開き方」で開きます。
-4. 「Mac 全体」をスキャンします。読めないフォルダがある場合は、システム設定 → プライバシーとセキュリティ → フルディスクアクセス でこのアプリを許可すると計測できます。
-5. AI 判定を使うなら「Continue with ChatGPT」でサインインし、モデルを選んで「AI で判定」を押します。
+4. 最初の画面で「Continue with ChatGPT」でサインインします。ChatGPT プランの利用を許可すると AI 判定が使えます。許可しなかった場合は「AI 判定なしで続ける」で、元 CLI のルールとハードブロックだけのモードに入れます（OpenAI には何も送りません）。
+5. 「Mac 全体」をスキャンします。読めないフォルダがある場合は、システム設定 → プライバシーとセキュリティ → フルディスクアクセス でこのアプリを許可すると計測できます。
+6. AI 判定を使う場合は、モデルを選んで「AI で判定」を押します。
 
 ### 未署名・未公証アプリの開き方
 
@@ -133,8 +135,8 @@ GitHub Actions（どちらも macos-latest）:
 `src-tauri/tauri.conf.json`・`src-tauri/Cargo.toml`・`package.json` の `version` を上げてコミットし、同じ番号のタグを push します（タグとバージョンが違うと Release ワークフローは止まります）。
 
 ```bash
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 ## 公証の有効化手順

@@ -10,15 +10,17 @@ export interface StepDef {
   id: StepId;
   n: number;
   label: string;
+  /** Compact label for the header stepper at narrow widths. The full `label` stays in the step's top bar. */
+  shortLabel: string;
 }
 
 export const STEPS: StepDef[] = [
-  { id: "target", n: 1, label: "スキャン対象を選ぶ" },
-  { id: "scanning", n: 2, label: "スキャン中" },
-  { id: "review", n: 3, label: "一覧を確認" },
-  { id: "ai", n: 4, label: "AI 判定" },
-  { id: "trash", n: 5, label: "ゴミ箱へ移動の確認" },
-  { id: "done", n: 6, label: "完了" },
+  { id: "target", n: 1, label: "スキャン対象を選ぶ", shortLabel: "対象選択" },
+  { id: "scanning", n: 2, label: "スキャン中", shortLabel: "スキャン" },
+  { id: "review", n: 3, label: "一覧を確認", shortLabel: "一覧" },
+  { id: "ai", n: 4, label: "AI 判定", shortLabel: "AI判定" },
+  { id: "trash", n: 5, label: "ゴミ箱へ移動の確認", shortLabel: "ゴミ箱へ" },
+  { id: "done", n: 6, label: "完了", shortLabel: "完了" },
 ];
 
 export interface FlowState {
