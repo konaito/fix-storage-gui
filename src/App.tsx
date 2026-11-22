@@ -53,6 +53,8 @@ export default function App() {
   const [scanStartedAt, setScanStartedAt] = useState(0);
   const [cancelling, setCancelling] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
+  /** Id of the latest scan. Progress events from any other scan are ignored. */
+  const scanIdRef = useRef(0);
   const [rows, setRows] = useState<Row[]>([]);
   const [denied, setDenied] = useState<string[]>([]);
   const [partial, setPartial] = useState(false);
@@ -127,7 +129,9 @@ export default function App() {
   useEffect(() => {
     api.envInfo().then(setEnv).catch((e) => setError(describeError(e)));
     void refreshStatus();
-    const un1 = listen<ScanProgress>("scan-progress", (e) => setProgress(e.payload));
+    const un1 = listen<ScanProgress>("scan-progress", (e) => {
+      if (e.payload.scanId === scanIdRef.current) setProgress(e.payload);
+    });
     const un2 = listen<TrashProgress>("trash-progress", (e) => setTrashProgress(e.payload));
     return () => {
       void un1.then((f) => f());
@@ -185,8 +189,9 @@ export default function App() {
     setCancelling(false);
     setScanStartedAt(Date.now());
     dispatch({ type: "scanStart" });
+    const scanId = ++scanIdRef.current;
     try {
-      const res = await api.scan(t.kind === "folder" ? t.path : null, minSize);
+      const res = await api.scan(t.kind === "folder" ? t.path : null, minSize, scanId);
       if (pushHistory) setHistory((h) => [...h, scanned]);
       setScanned(t);
       setTarget(t);

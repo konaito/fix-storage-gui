@@ -8,6 +8,7 @@ use crate::safety::cannot_remove;
 use serde::Serialize;
 use std::collections::{HashSet, VecDeque};
 use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::os::unix::fs::MetadataExt;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -81,12 +82,34 @@ fn cpu_time(pid: u32) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+/// Reads du's stderr to the end so du never blocks on a full pipe, keeping only whether
+/// a permission error was reported (not the text, which can be megabytes).
+fn watch_stderr(stderr: impl Read) -> bool {
+    let mut reader = BufReader::new(stderr);
+    let mut line = Vec::new();
+    let mut denied = false;
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => return denied,
+            Ok(_) => {
+                if !denied {
+                    let text = String::from_utf8_lossy(&line);
+                    denied = text.contains("not permitted") || text.contains("Permission denied");
+                }
+            }
+        }
+    }
+}
+
 /// `du -skx` for one folder. On macOS a du that used no CPU between two checks
 /// 5 s apart is waiting on a privacy prompt: kill it and report the folder unreadable
-/// (same rule as fix-storage).
+/// (same rule as fix-storage). A du that cannot be started also counts as unreadable.
 fn du(path: &str, cancel: &AtomicBool) -> DuResult {
     let child = Command::new("du").args(["-skx", path]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
-    let Ok(mut child) = child else { return DuResult { bytes: 0, denied: false } };
+    let Ok(mut child) = child else { return DuResult { bytes: 0, denied: true } };
+    // stdout is one short line; stderr gets a line per unreadable folder and must be drained.
+    let stderr = child.stderr.take().map(|e| std::thread::spawn(move || watch_stderr(e)));
     let pid = child.id();
     let watchdog = cfg!(target_os = "macos");
     let mut last_cpu: Option<String> = None;
@@ -101,6 +124,9 @@ fn du(path: &str, cancel: &AtomicBool) -> DuResult {
         if cancel.load(Ordering::Relaxed) {
             let _ = child.kill();
             let _ = child.wait();
+            if let Some(h) = stderr {
+                let _ = h.join();
+            }
             return DuResult { bytes: 0, denied: false };
         }
         if watchdog && last_check.elapsed() >= Duration::from_secs(5) {
@@ -118,12 +144,13 @@ fn du(path: &str, cancel: &AtomicBool) -> DuResult {
         std::thread::sleep(Duration::from_millis(50));
     }
     let out = child.wait_with_output();
-    let (stdout, stderr) = match out {
-        Ok(o) => (String::from_utf8_lossy(&o.stdout).to_string(), String::from_utf8_lossy(&o.stderr).to_string()),
-        Err(_) => (String::new(), String::new()),
+    let stdout = match out {
+        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+        Err(_) => String::new(),
     };
+    let stderr_denied = stderr.map(|h| h.join().unwrap_or(false)).unwrap_or(false);
     let kb: u64 = stdout.split_whitespace().next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    DuResult { bytes: kb * 1024, denied: stalled || stderr.contains("not permitted") || stderr.contains("Permission denied") }
+    DuResult { bytes: kb * 1024, denied: stalled || stderr_denied }
 }
 
 fn mtime_ms(meta: &fs::Metadata) -> Option<f64> {
@@ -191,25 +218,34 @@ fn holds_root(path: &str, roots: &[Root]) -> bool {
 }
 
 /// Collects what to measure. `whole_mac`: every fix-storage root, children measured one by one,
-/// nested roots measured on their own so nothing is counted twice. Otherwise: the children of `folder`.
+/// nested roots measured on their own so nothing is counted twice. Otherwise: the children of `folder`,
+/// and a `folder` that cannot be read for any reason but missing permission is an error.
 fn collect_units(
     start: &[String],
     roots: &[Root],
     root_paths: &HashSet<String>,
     nested_aware: bool,
     denied: &mut Vec<String>,
+    cancel: &AtomicBool,
     on_progress: &dyn Fn(Progress),
-) -> Vec<Unit> {
+) -> Result<Vec<Unit>, String> {
     let mut units = Vec::new();
     let mut queue: VecDeque<String> = start.iter().cloned().collect();
     while let Some(dir) = queue.pop_front() {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         on_progress(Progress { phase: "listing", current: dir.clone(), done: units.len(), total: 0 });
         let entries = match fs::read_dir(&dir) {
             Ok(e) => e,
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::PermissionDenied {
                     denied.push(dir.clone());
+                } else if !nested_aware {
+                    // Only the chosen folder is ever queued here.
+                    return Err(format!("フォルダを読めませんでした: {dir}（{e}）"));
                 } else if let Ok(meta) = fs::symlink_metadata(&dir) {
+                    // Whole Mac: a root that does not exist on this Mac is normal and skipped.
                     if meta.is_file() {
                         units.push(Unit::File(dir.clone(), meta.blocks() * 512));
                     }
@@ -217,12 +253,30 @@ fn collect_units(
                 continue;
             }
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    denied.push(dir.clone());
+                    continue;
+                }
+            };
             let child = format!("{}/{}", dir.trim_end_matches('/'), entry.file_name().to_string_lossy());
             if nested_aware && root_paths.contains(&child) {
                 continue;
             }
-            let Ok(meta) = fs::symlink_metadata(&child) else { continue };
+            let meta = match fs::symlink_metadata(&child) {
+                Ok(meta) => meta,
+                // Removed since the folder was listed.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(_) => {
+                    denied.push(child);
+                    continue;
+                }
+            };
             if meta.is_dir() {
                 if nested_aware && holds_root(&child, roots) {
                     queue.push_back(child);
@@ -234,7 +288,7 @@ fn collect_units(
             }
         }
     }
-    units
+    Ok(units)
 }
 
 pub struct ScanOptions {
@@ -245,7 +299,7 @@ pub struct ScanOptions {
     pub limit: usize,
 }
 
-pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn(Progress) + Send + Sync + 'static) -> ScanResult {
+pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn(Progress) + Send + Sync + 'static) -> Result<ScanResult, String> {
     let on_progress = Arc::new(on_progress);
     let roots = mac_roots(&opts.home);
     let root_paths: HashSet<String> = roots.iter().map(|r| r.path.clone()).collect();
@@ -253,9 +307,9 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     let units = match &opts.folder {
         None => {
             let start: Vec<String> = roots.iter().map(|r| r.path.clone()).collect();
-            collect_units(&start, &roots, &root_paths, true, &mut denied, &*on_progress)
+            collect_units(&start, &roots, &root_paths, true, &mut denied, &cancel, &*on_progress)?
         }
-        Some(folder) => collect_units(&[folder.clone()], &roots, &root_paths, false, &mut denied, &*on_progress),
+        Some(folder) => collect_units(&[folder.clone()], &roots, &root_paths, false, &mut denied, &cancel, &*on_progress)?,
     };
 
     let total = units.len();
@@ -301,8 +355,14 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
 
     let paths: Vec<String> = list.iter().map(|(p, _, _)| p.clone()).collect();
     on_progress(Progress { phase: "measuring", current: String::new(), done: done.load(Ordering::Relaxed), total });
-    let used = last_used(&paths, &*on_progress);
-    on_progress(Progress { phase: "dates", current: String::new(), done: paths.len(), total: paths.len() });
+    // A cancelled scan (stopped by the user or replaced by a new scan) returns at once, without dates.
+    let used = if cancelled {
+        vec![None; paths.len()]
+    } else {
+        let used = last_used(&paths, &*on_progress);
+        on_progress(Progress { phase: "dates", current: String::new(), done: paths.len(), total: paths.len() });
+        used
+    };
     let items = list
         .into_iter()
         .zip(used)
@@ -324,7 +384,7 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     let mut denied = std::mem::take(&mut *denied_m.lock().unwrap());
     denied.sort();
     denied.dedup();
-    ScanResult { items, denied, disk: disk_space(), cancelled }
+    Ok(ScanResult { items, denied, disk: disk_space(), cancelled })
 }
 
 #[cfg(test)]
@@ -340,7 +400,7 @@ mod tests {
 
     #[test]
     fn scans_a_folder() {
-        let dir = std::env::temp_dir().join(format!("fsg-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("fsg-test-scans-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("sub")).unwrap();
         fs::write(dir.join("sub/big.bin"), vec![1u8; 200_000]).unwrap();
@@ -351,7 +411,8 @@ mod tests {
             ScanOptions { home: "/nonexistent-home".into(), folder: Some(dir.to_string_lossy().into()), min_size: 0, limit: 100 },
             Arc::new(AtomicBool::new(false)),
             move |p| seen2.lock().unwrap().push(p.phase),
-        );
+        )
+        .unwrap();
         let phases = seen.lock().unwrap().clone();
         assert_eq!(phases.first(), Some(&"listing"));
         assert!(phases.contains(&"measuring"));
@@ -361,5 +422,72 @@ mod tests {
         assert!(res.items[0].dir && res.items[0].size >= 200_000);
         assert!(res.items[0].blocked.is_some(), "outside home is blocked");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("fsg-test-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// #33: with many unreadable subfolders du writes more than a pipe's worth of errors to stderr.
+    /// It must not stall on that pipe (the watchdog would then kill it and report size 0).
+    #[test]
+    fn du_many_denied_subfolders() {
+        let dir = temp_dir("du-denied");
+        let target = dir.join("target");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("data.bin"), vec![7u8; 5_000_000]).unwrap();
+        let long = "x".repeat(200);
+        let mut locked = Vec::new();
+        for i in 0..1500 {
+            let d = target.join(format!("{long}-{i}"));
+            fs::create_dir(&d).unwrap();
+            fs::set_permissions(&d, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
+            locked.push(d);
+        }
+        let started = Instant::now();
+        let r = du(&target.to_string_lossy(), &AtomicBool::new(false));
+        let took = started.elapsed();
+        for d in &locked {
+            let _ = fs::set_permissions(d, std::os::unix::fs::PermissionsExt::from_mode(0o755));
+        }
+        let _ = fs::remove_dir_all(&dir);
+        assert!(r.bytes >= 5_000_000, "size was {} after {:?}", r.bytes, took);
+        assert!(r.denied, "unreadable subfolders are reported");
+    }
+
+    /// #39: a folder that cannot be read is an error, not an empty result.
+    #[test]
+    fn missing_folder_is_an_error() {
+        let res = run_scan(
+            ScanOptions { home: "/nonexistent-home".into(), folder: Some("/nonexistent/zzz".into()), min_size: 0, limit: 100 },
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        );
+        let err = res.err().expect("missing folder looked like an empty folder");
+        assert!(err.contains("/nonexistent/zzz"), "{err}");
+    }
+
+    /// #40: a scan cancelled before it starts lists nothing and never asks Spotlight for dates.
+    #[test]
+    fn cancelled_scan_skips_listing_and_dates() {
+        let dir = temp_dir("cancelled");
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("sub/a.bin"), vec![1u8; 10_000]).unwrap();
+        let seen: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+        let seen2 = seen.clone();
+        let res = run_scan(
+            ScanOptions { home: "/nonexistent-home".into(), folder: Some(dir.to_string_lossy().into()), min_size: 0, limit: 100 },
+            Arc::new(AtomicBool::new(true)),
+            move |p| seen2.lock().unwrap().push(p.phase),
+        )
+        .unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        let phases = seen.lock().unwrap().clone();
+        assert!(res.cancelled);
+        assert!(!phases.contains(&"listing"), "listing ran after cancel: {phases:?}");
+        assert!(!phases.contains(&"dates"), "dates ran after cancel: {phases:?}");
     }
 }
