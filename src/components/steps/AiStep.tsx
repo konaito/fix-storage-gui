@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { DEFAULT_CONCURRENCY } from "../../ai/runBatches";
 import { elapsedJa, ratio, type Bucket, type VerdictSummary } from "../../flow/progress";
+import { stepNo } from "../../flow/steps";
 import { formatBytes } from "../../lib/format";
 import { AI_VERDICT_JA } from "../../lib/labels";
 import { StepBar } from "../ActionBar";
@@ -25,6 +26,12 @@ export interface AiOutcome {
 }
 
 interface Props {
+  /** The user uses AI judgement: this step comes before the list and is not optional (#12). */
+  aiFirst: boolean;
+  /** Whether the list step can be opened (with aiFirst, only after an AI run). */
+  canGoReview: boolean;
+  /** "戻る" (to the target step when aiFirst). */
+  onBack: () => void;
   planReady: boolean;
   signedIn: boolean;
   modelName: string | null;
@@ -44,13 +51,13 @@ interface Props {
 }
 
 export function AiStep(p: Props) {
-  if (p.running) return <AiRunning run={p.running} destination={p.destination} onStop={p.onStop} />;
+  if (p.running) return <AiRunning run={p.running} eyebrow={eyebrowOf(p.aiFirst)} destination={p.destination} onStop={p.onStop} />;
   const batches = Math.ceil(p.targets / p.batchSize);
 
   return (
     <section className="step-page">
       <StepBar
-        eyebrow="ステップ 4（任意）"
+        eyebrow={eyebrowOf(p.aiFirst)}
         title={p.outcome ? (p.outcome.error ? "AI 判定を完了できませんでした" : p.outcome.stopped ? "AI 判定を途中で中止しました" : "AI 判定が終わりました") : "AI に判定してもらう"}
         desc={
           <>
@@ -63,18 +70,35 @@ export function AiStep(p: Props) {
             <button type="button" onClick={p.onOpenSend} disabled={!(p.planReady && !!p.modelName && p.targets > 0)}>
               もう一度判定する…
             </button>
-            <button type="button" className="primary large" onClick={p.onGoReview}>
+            <button type="button" className="primary large" onClick={p.onGoReview} disabled={!p.canGoReview}>
               結果を一覧で確認する →
             </button>
           </>
         ) : p.planReady && !!p.modelName && p.targets > 0 ? (
           <>
-            <button type="button" onClick={p.onGoReview}>
-              ← 一覧に戻る
-            </button>
+            {p.aiFirst ? (
+              <button type="button" onClick={p.onBack}>
+                ← 対象を変える
+              </button>
+            ) : (
+              <button type="button" onClick={p.onGoReview}>
+                ← 一覧に戻る
+              </button>
+            )}
             <button type="button" className="primary large" onClick={p.onOpenSend}>
               送信内容を確認する…
             </button>
+          </>
+        ) : p.aiFirst ? (
+          <>
+            <button type="button" onClick={p.onBack}>
+              ← 対象を変える
+            </button>
+            {p.canGoReview && (
+              <button type="button" className="primary large" onClick={p.onGoReview}>
+                一覧へ →
+              </button>
+            )}
           </>
         ) : (
           <>
@@ -87,7 +111,12 @@ export function AiStep(p: Props) {
           </>
         )}
       </StepBar>
-      {!p.outcome && p.planReady && <p className="muted small lead">送る前に、実際に送る内容（JSON）をすべて確認できます。AI の判定は参考で、保護リストと元 CLI のルールが常に優先されます。</p>}
+      {!p.outcome && p.planReady && (
+        <p className="muted small lead">
+          {p.aiFirst && "一覧は AI の判定が終わってから開きます。"}
+          送る前に、実際に送る内容（JSON）をすべて確認できます。AI の判定は参考で、保護リストと元 CLI のルールが常に優先されます。
+        </p>
+      )}
 
       {p.outcome && (
         <div className={`result-card ${p.outcome.error ? "error-card" : ""}`}>
@@ -95,11 +124,18 @@ export function AiStep(p: Props) {
             <>
               <p>{p.outcome.error}</p>
               {p.outcome.judged > 0 && <p className="muted small">{p.outcome.judged} 件は判定済みで、一覧に反映しています。</p>}
+              {p.aiFirst && <p className="muted small">AI が判定していない項目は「未判定」になり、選べません。</p>}
             </>
           ) : (
             <>
               <h3>{p.outcome.judged} 件を判定しました</h3>
-              {p.outcome.missing > 0 && <p className="muted small">{p.outcome.missing} 件は AI の応答に含まれていなかったため、元 CLI の判定のままです。</p>}
+              {p.outcome.missing > 0 && (
+                <p className="muted small">
+                  {p.outcome.missing} 件は AI の応答に含まれていなかったため、
+                  {p.aiFirst ? "「未判定」のままで、選べません。" : "元 CLI の判定のままです。"}
+                </p>
+              )}
+              {p.outcome.stopped && p.aiFirst && <p className="muted small">中止までに判定できなかった項目は「未判定」のままで、選べません。</p>}
             </>
           )}
           {p.summary.all.count > 0 && (
@@ -148,7 +184,11 @@ export function AiStep(p: Props) {
   );
 }
 
-function AiRunning({ run, destination, onStop }: { run: AiRun; destination: string; onStop: () => void }) {
+function eyebrowOf(aiFirst: boolean): string {
+  return `ステップ ${stepNo(aiFirst, "ai")}${aiFirst ? "" : "（任意）"}`;
+}
+
+function AiRunning({ run, eyebrow, destination, onStop }: { run: AiRun; eyebrow: string; destination: string; onStop: () => void }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 500);
@@ -157,7 +197,7 @@ function AiRunning({ run, destination, onStop }: { run: AiRun; destination: stri
   return (
     <section className="step-page">
       <StepBar
-        eyebrow="ステップ 4（任意）"
+        eyebrow={eyebrow}
         busy
         title={run.stopRequested ? "送信中の分が終わったら中止します…" : "AI が判定しています"}
         desc="送っているのはメタデータだけです。結果はバッチごとに一覧へ反映されます。"

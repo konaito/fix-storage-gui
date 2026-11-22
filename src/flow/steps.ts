@@ -1,6 +1,7 @@
 /**
  * The whole flow as separate steps, as a small pure state machine (unit-tested in test/steps.test.ts).
  * 1 スキャン対象を選ぶ → 2 スキャン中 → 3 一覧を確認 → 4 AI 判定（任意）→ 5 ゴミ箱へ移動の確認 → 6 完了
+ * ChatGPT プランを使うユーザーは AI 判定が先で、3 AI 判定 → 4 一覧を確認 の順になる（#12）。
  */
 
 export type StepId = "target" | "scanning" | "review" | "ai" | "trash" | "done";
@@ -14,7 +15,7 @@ export interface StepDef {
   shortLabel: string;
 }
 
-export const STEPS: StepDef[] = [
+const BASE_STEPS: StepDef[] = [
   { id: "target", n: 1, label: "スキャン対象を選ぶ", shortLabel: "対象選択" },
   { id: "scanning", n: 2, label: "スキャン中", shortLabel: "スキャン" },
   { id: "review", n: 3, label: "一覧を確認", shortLabel: "一覧" },
@@ -22,6 +23,17 @@ export const STEPS: StepDef[] = [
   { id: "trash", n: 5, label: "ゴミ箱へ移動の確認", shortLabel: "ゴミ箱へ" },
   { id: "done", n: 6, label: "完了", shortLabel: "完了" },
 ];
+
+/** Steps in the order the user goes through them. With `aiFirst` the AI step comes before the list. */
+export function stepsFor(aiFirst: boolean): StepDef[] {
+  if (!aiFirst) return BASE_STEPS;
+  const order: StepId[] = ["target", "scanning", "ai", "review", "trash", "done"];
+  return order.map((id, i) => ({ ...BASE_STEPS.find((s) => s.id === id)!, n: i + 1 }));
+}
+
+export function stepNo(aiFirst: boolean, id: StepId): number {
+  return stepsFor(aiFirst).find((s) => s.id === id)!.n;
+}
 
 export interface FlowState {
   step: StepId;
@@ -32,13 +44,28 @@ export interface FlowState {
   aiDone: boolean;
   /** Where "戻る" from the trash step goes. */
   trashFrom: "review" | "ai";
+  /** The user uses AI judgement: the AI step comes before the list, and the list opens only after it (#12). */
+  aiFirst: boolean;
+  /** With aiFirst: an AI run has ended for the current list (even a failed one), or there was nothing to send. */
+  aiSettled: boolean;
 }
 
-export const initialFlow: FlowState = { step: "target", busy: null, hasScan: false, aiDone: false, trashFrom: "review" };
+export const initialFlow: FlowState = {
+  step: "target",
+  busy: null,
+  hasScan: false,
+  aiDone: false,
+  trashFrom: "review",
+  aiFirst: false,
+  aiSettled: false,
+};
 
 export type FlowEvent =
   | { type: "scanStart" }
-  | { type: "scanEnd"; ok: boolean }
+  /** `aiTargets`: how many items of the new list can be sent to the AI (unprotected ones). */
+  | { type: "scanEnd"; ok: boolean; aiTargets?: number }
+  /** Whether the user uses AI judgement changed (sign-in, plan consent, sign-out). */
+  | { type: "mode"; aiFirst: boolean; aiTargets: number }
   | { type: "go"; to: StepId; selected: number }
   | { type: "back"; selected: number }
   | { type: "aiStart" }
@@ -47,7 +74,7 @@ export type FlowEvent =
   | { type: "trashEnd" }
   | { type: "reset" };
 
-const index = (id: StepId) => STEPS.findIndex((s) => s.id === id);
+const index = (s: FlowState, id: StepId) => stepsFor(s.aiFirst).findIndex((d) => d.id === id);
 
 /** Whether the user may jump to `to` (stepper click / buttons). Never while something is running. */
 export function canGo(s: FlowState, to: StepId, selected: number): boolean {
@@ -56,6 +83,7 @@ export function canGo(s: FlowState, to: StepId, selected: number): boolean {
     case "target":
       return true;
     case "review":
+      return s.hasScan && (!s.aiFirst || s.aiSettled);
     case "ai":
       return s.hasScan;
     case "trash":
@@ -71,11 +99,12 @@ export function canGo(s: FlowState, to: StepId, selected: number): boolean {
 export function backTarget(s: FlowState): StepId | null {
   if (s.busy) return null;
   switch (s.step) {
-    case "review":
     case "scanning":
       return "target";
+    case "review":
+      return s.aiFirst ? "ai" : "target";
     case "ai":
-      return "review";
+      return s.aiFirst ? "target" : "review";
     case "trash":
       return s.trashFrom;
     case "done":
@@ -90,12 +119,22 @@ export function flowReducer(s: FlowState, e: FlowEvent): FlowState {
     case "scanStart":
       if (s.busy) return s;
       return { ...s, step: "scanning", busy: "scan" };
-    case "scanEnd":
+    case "scanEnd": {
       if (s.busy !== "scan") return s;
       // A failed scan goes back to the previous list if there is one, otherwise to the target step (the error is shown there).
-      return e.ok
-        ? { ...s, step: "review", busy: null, hasScan: true, aiDone: false }
-        : { ...s, step: s.hasScan ? "review" : "target", busy: null };
+      if (e.ok) {
+        const aiSettled = !s.aiFirst || (e.aiTargets ?? 0) === 0;
+        return { ...s, step: aiSettled ? "review" : "ai", busy: null, hasScan: true, aiDone: false, aiSettled };
+      }
+      return { ...s, step: s.hasScan ? (canGo({ ...s, busy: null }, "review", 0) ? "review" : "ai") : "target", busy: null };
+    }
+    case "mode": {
+      if (s.aiFirst === e.aiFirst) return s;
+      if (!e.aiFirst) return { ...s, aiFirst: false };
+      const aiSettled = s.aiDone || e.aiTargets === 0;
+      const step = s.step === "review" && s.hasScan && !aiSettled && !s.busy ? "ai" : s.step;
+      return { ...s, aiFirst: true, aiSettled, step };
+    }
     case "go": {
       if (s.step === e.to || !canGo(s, e.to, e.selected)) return s;
       const trashFrom = e.to === "trash" ? (s.step === "ai" ? "ai" : "review") : s.trashFrom;
@@ -112,7 +151,7 @@ export function flowReducer(s: FlowState, e: FlowEvent): FlowState {
       return { ...s, step: "ai", busy: "ai" };
     case "aiEnd":
       if (s.busy !== "ai") return s;
-      return { ...s, busy: null, aiDone: s.aiDone || e.ok };
+      return { ...s, busy: null, aiDone: s.aiDone || e.ok, aiSettled: true };
     case "trashStart":
       if (s.busy || s.step !== "trash") return s;
       return { ...s, busy: "trash" };
@@ -120,19 +159,19 @@ export function flowReducer(s: FlowState, e: FlowEvent): FlowState {
       if (s.busy !== "trash") return s;
       return { ...s, step: "done", busy: null };
     case "reset":
-      return s.busy ? s : { ...initialFlow };
+      return s.busy ? s : { ...initialFlow, aiFirst: s.aiFirst };
   }
 }
 
 export type StepStatus = "done" | "current" | "upcoming" | "skipped";
 
-/** How a step looks in the progress indicator. Step 4 (AI) is optional and shows as skipped when passed over. */
+/** How a step looks in the progress indicator. Without aiFirst the AI step is optional and shows as skipped when passed over. */
 export function stepStatus(s: FlowState, id: StepId): StepStatus {
-  const cur = index(s.step);
-  const i = index(id);
+  const cur = index(s, s.step);
+  const i = index(s, id);
   if (i === cur) return "current";
   if (id === "ai" && s.aiDone) return "done";
-  if (i < cur) return id === "ai" && !s.aiDone ? "skipped" : "done";
+  if (i < cur) return id === "ai" && !s.aiDone && !s.aiFirst ? "skipped" : "done";
   // Going back to review after a finished trash keeps earlier work visible as done.
   if (id === "scanning" && s.hasScan) return "done";
   return "upcoming";

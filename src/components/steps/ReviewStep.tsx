@@ -1,10 +1,11 @@
 import { StepBar } from "../ActionBar";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { sortRows, type SortMode } from "../../flow/order";
+import { stepNo } from "../../flow/steps";
 import { applyFilter, summarize, type Filter } from "../../flow/progress";
 import { api } from "../../lib/api";
 import { agoJa, formatBytes, isoDate } from "../../lib/format";
-import { AI_VERDICT_JA, CATEGORY_JA, CLI_VERDICT_JA } from "../../lib/labels";
+import { AI_VERDICT_JA, BUCKET_JA, CATEGORY_JA, CLI_VERDICT_JA, sourceJa, verdictClass, verdictJa, whyNotSelectable } from "../../lib/labels";
 import type { Row } from "../../lib/rows";
 import { selectable } from "../../safety/merge";
 import { InfoPanel } from "../review/InfoPanel";
@@ -20,6 +21,8 @@ interface Props {
   denied: string[];
   partial: boolean;
   aiDone: boolean;
+  /** The user uses AI judgement, so the list comes after the AI step (#12). */
+  aiFirst: boolean;
   selected: Set<string>;
   onToggle: (path: string) => void;
   onSelectPaths: (paths: string[]) => void;
@@ -61,12 +64,18 @@ export function ReviewStep(p: Props) {
   return (
     <section className="step-page review">
       <StepBar
-        eyebrow="ステップ 3"
+        eyebrow={`ステップ ${stepNo(p.aiFirst, "review")}`}
         title="ゴミ箱に移すものを選ぶ"
         desc={
           p.aiDone
-            ? "AI の判定を反映しました。「削除していい」から順に表示しています。"
-            : "いまの判定は元 CLI のルールです。項目をクリックすると右に詳細が出ます。"
+            ? sum.pending.count > 0
+              ? `AI の判定を反映しました。AI が判定していない ${sum.pending.count} 件は「未判定」で、選べません。`
+              : "AI の判定を反映しました。「削除していい」から順に表示しています。"
+            : p.aiFirst
+              ? sum.pending.count > 0
+                ? "AI 判定ができなかったため「未判定」のままで、選べません。「AI で判定する」からやり直してください。"
+                : "AI に送る項目はありませんでした。項目をクリックすると右に詳細が出ます。"
+              : "いまの判定は元 CLI のルールです。項目をクリックすると右に詳細が出ます。"
         }
         meta={
           <span className="sel-summary">
@@ -125,7 +134,7 @@ export function ReviewStep(p: Props) {
               </ul>
             </details>
           )}
-          <div className="stats tight">
+          <div className={`stats tight ${sum.pending.count > 0 ? "six" : ""}`}>
             <button type="button" className={`stat ${filter === "all" ? "on" : ""}`} onClick={() => setFilter("all")}>
               <span className="stat-label">見つかった項目</span>
               <span className="stat-line">
@@ -133,9 +142,9 @@ export function ReviewStep(p: Props) {
                 <span className="stat-sub">{formatBytes(sum.all.size)}</span>
               </span>
             </button>
-            {(["safe", "caution", "keep", "locked"] as const).map((b) => (
+            {(["safe", "caution", "keep", "locked", "pending"] as const).filter((b) => b !== "pending" || sum.pending.count > 0).map((b) => (
               <button type="button" key={b} className={`stat ${b} ${filter === b ? "on" : ""}`} onClick={() => setFilter(b)}>
-                <span className="stat-label">{b === "locked" ? "保護" : AI_VERDICT_JA[b]}</span>
+                <span className="stat-label">{BUCKET_JA[b]}</span>
                 <span className="stat-line">
                   <span className="stat-value">{sum[b].count} 件</span>
                   <span className="stat-sub">{formatBytes(sum[b].size)}</span>
@@ -233,7 +242,7 @@ export function ReviewStep(p: Props) {
                             aria-label={`${r.name} を選択`}
                             checked={on}
                             disabled={!can}
-                            title={can ? undefined : r.final.locked ? "保護されているため選べません" : "「消しちゃダメ」の判定なので選べません"}
+                            title={can ? undefined : whyNotSelectable(r.final) ?? undefined}
                             onChange={() => p.onToggle(r.path)}
                           />
                         </td>
@@ -258,10 +267,10 @@ export function ReviewStep(p: Props) {
                           {r.cli.reason && <div className="muted tiny">{r.cli.reason}</div>}
                         </td>
                         <td className="small verdict">
-                          <span className={`badge ${r.final.verdict}`}>{AI_VERDICT_JA[r.final.verdict]}</span>
+                          <span className={`badge ${verdictClass(r.final)}`}>{verdictJa(r.final)}</span>
                           <span className="muted tiny">
                             {" "}
-                            {r.final.source === "hard-block" ? "保護リスト" : r.final.source === "cli" ? (r.final.locked ? "元CLI" : "元CLIのみ") : "AI"}
+                            {sourceJa(r.final, true)}
                           </span>
                           {r.final.reason && <div className="tiny">{r.final.reason}</div>}
                         </td>
