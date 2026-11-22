@@ -23,7 +23,7 @@ import { canGo, flowReducer, initialFlow, type StepId } from "./flow/steps";
 import { api, isSiwcError, type EnvInfo, type Model, type ScanProgress, type SiwcStatus, type TrashOutcome, type TrashProgress } from "./lib/api";
 import { describeError } from "./lib/errors";
 import { formatBytes } from "./lib/format";
-import { toRow, withAi, type Row } from "./lib/rows";
+import { forDisplay, toRow, withAi, type Row } from "./lib/rows";
 import { selectable } from "./safety/merge";
 import { UpdateCheckButton } from "./components/UpdateBanner";
 import { setUpdateBlocked } from "./lib/updater";
@@ -68,6 +68,8 @@ export default function App() {
   const [aiRun, setAiRun] = useState<AiRun | null>(null);
   const [aiOutcome, setAiOutcome] = useState<AiOutcome | null>(null);
   const aiStop = useRef(false);
+  // Signed-in users with plan usage: open the AI send dialog once after each scan (#12). Cancelling does not reopen it.
+  const [autoAi, setAutoAi] = useState(false);
 
   const [trashProgress, setTrashProgress] = useState<TrashProgress | null>(null);
   const [trashOutcomes, setTrashOutcomes] = useState<TrashOutcome[]>([]);
@@ -94,6 +96,17 @@ export default function App() {
   useEffect(() => {
     if (gate.statusVersion > 0) void refreshStatus();
   }, [gate.statusVersion, refreshStatus]);
+
+  // What every step shows and acts on: with plan usage, rows the AI has not judged are "未判定" and can't be selected (#12).
+  const view = useMemo(() => rows.map((r) => forDisplay(r, planReady)), [rows, planReady]);
+  // AI review targets: everything not locked by the hard block list or fix-storage's rules.
+  const aiTargets = useMemo(() => view.filter((r) => !r.final.locked), [view]);
+  useEffect(() => {
+    dispatch({ type: "mode", aiFirst: planReady, aiTargets: aiTargets.length });
+    if (!planReady) setAutoAi(false);
+    // Only a change of mode matters here; aiTargets is read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planReady]);
 
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
@@ -176,14 +189,17 @@ export default function App() {
       if (pushHistory) setHistory((h) => [...h, scanned]);
       setScanned(t);
       setTarget(t);
-      setRows(res.items.map((i) => toRow(i)));
+      const next = res.items.map((i) => toRow(i));
+      const sendable = next.filter((r) => !r.final.locked).length;
+      setRows(next);
       setDenied(res.denied);
       setDisk(res.disk);
       setPartial(res.cancelled);
       setSelected(new Set());
       setSortChoice(null);
       setAiOutcome(null);
-      dispatch({ type: "scanEnd", ok: true });
+      setAutoAi(planReady && sendable > 0);
+      dispatch({ type: "scanEnd", ok: true, aiTargets: sendable });
     } catch (e) {
       setError(describeError(e));
       setTarget(scanned);
@@ -208,9 +224,6 @@ export default function App() {
     setHistory((h) => h.slice(0, -1));
     void runScan(prev, false);
   }
-
-  // AI review targets: everything not locked by the hard block list or fix-storage's rules.
-  const aiTargets = useMemo(() => rows.filter((r) => !r.final.locked), [rows]);
 
   async function sendToAi(mask: boolean) {
     setAiDialog(false);
@@ -285,16 +298,24 @@ export default function App() {
     }
   }
 
+  // Open the send dialog by itself once the AI step is up and a model is ready.
+  useEffect(() => {
+    if (autoAi && flow.step === "ai" && !flow.busy && planReady && !!model && !!env && aiTargets.length > 0) {
+      setAutoAi(false);
+      setAiDialog(true);
+    }
+  }, [autoAi, flow.step, flow.busy, planReady, model, env, aiTargets.length]);
+
   // Drop selections that new verdicts (or a rescan) no longer allow.
   useEffect(() => {
     setSelected((sel) => {
-      const ok = new Set(rows.filter((r) => selectable(r.final)).map((r) => r.path));
+      const ok = new Set(view.filter((r) => selectable(r.final)).map((r) => r.path));
       const next = new Set([...sel].filter((p) => ok.has(p)));
       return next.size === sel.size ? sel : next;
     });
-  }, [rows]);
+  }, [view]);
 
-  const chosen = rows.filter((r) => selected.has(r.path) && selectable(r.final));
+  const chosen = view.filter((r) => selected.has(r.path) && selectable(r.final));
 
   async function doTrash() {
     if (chosen.length === 0) return;
@@ -321,7 +342,7 @@ export default function App() {
 
   /** Only selectable rows can ever be selected (hard block / "keep" stay out). */
   function selectPaths(paths: string[]) {
-    const ok = new Set(rows.filter((r) => selectable(r.final)).map((r) => r.path));
+    const ok = new Set(view.filter((r) => selectable(r.final)).map((r) => r.path));
     setSelected(new Set(paths.filter((p) => ok.has(p))));
   }
 
@@ -333,7 +354,7 @@ export default function App() {
   }
 
   const go = (to: StepId) => dispatch({ type: "go", to, selected: chosen.length });
-  const aiSummary = useMemo(() => summarize(rows.filter((r) => r.final.source === "ai")), [rows]);
+  const aiSummary = useMemo(() => summarize(view.filter((r) => r.final.source === "ai")), [view]);
   const modelInfo = models.find((m) => m.slug === model);
 
   // The list / confirmation steps need the full width; the account panel matters on steps 1, 2 and 4.
@@ -355,7 +376,8 @@ export default function App() {
           }}
           disk={disk}
           canResume={flow.hasScan}
-          onResume={() => go("review")}
+          resumeLabel={canGo(flow, "review", 0) ? "前回の一覧に戻る" : "前回の AI 判定に戻る"}
+          onResume={() => go(canGo(flow, "review", 0) ? "review" : "ai")}
         />
       );
       break;
@@ -376,15 +398,16 @@ export default function App() {
     case "review":
       page = (
         <ReviewStep
-          rows={rows}
+          rows={view}
           target={scanned}
           denied={denied}
           partial={partial}
           aiDone={flow.aiDone}
+          aiFirst={flow.aiFirst}
           selected={selected}
           onToggle={toggle}
           onSelectPaths={selectPaths}
-          onSelectAllSafe={() => selectPaths(safePaths(rows))}
+          onSelectAllSafe={() => selectPaths(safePaths(view))}
           onClearSelection={() => setSelected(new Set())}
           canGoUp={history.length > 0}
           onGoUp={goUp}
@@ -408,6 +431,9 @@ export default function App() {
     case "ai":
       page = (
         <AiStep
+          aiFirst={flow.aiFirst}
+          canGoReview={canGo(flow, "review", chosen.length)}
+          onBack={() => dispatch({ type: "back", selected: chosen.length })}
           planReady={planReady}
           signedIn={signedIn}
           modelName={modelInfo?.displayName ?? null}

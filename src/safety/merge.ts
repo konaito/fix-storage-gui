@@ -7,7 +7,8 @@ export interface FinalVerdict {
   reason: string;
   /** Locked items can never be selected for the Trash. */
   locked: boolean;
-  source: "hard-block" | "cli" | "ai";
+  /** "pending": the user uses AI judgement and the AI has not judged this item yet. */
+  source: "hard-block" | "cli" | "ai" | "pending";
 }
 
 export interface MergeInput {
@@ -15,6 +16,8 @@ export interface MergeInput {
   category: CategoryId;
   cli: Label;
   ai?: AiJudgement;
+  /** Signed-in users with ChatGPT plan usage: show no deletion verdict until the AI has judged the item (#12). */
+  requireAi?: boolean;
 }
 
 const FROM_CLI: Record<Label["verdict"], AiVerdict> = {
@@ -24,13 +27,17 @@ const FROM_CLI: Record<Label["verdict"], AiVerdict> = {
   system: "keep",
 };
 
+export const PENDING_REASON = "AI がまだ判定していません";
+
 /**
  * Safety order: hard block list > fix-storage's own rules > AI.
  * The AI can make things stricter, but never looser than the rules allow.
+ * With `requireAi`, an item the AI has not judged gets no deletion verdict ("pending", not selectable).
  */
-export function mergeVerdict({ blocked, category, cli, ai }: MergeInput): FinalVerdict {
+export function mergeVerdict({ blocked, category, cli, ai, requireAi }: MergeInput): FinalVerdict {
   if (blocked) return { verdict: "keep", reason: blocked, locked: true, source: "hard-block" };
   if (cli.verdict === "system") return { verdict: "keep", reason: cli.reason || "システムやツールが管理しています", locked: true, source: "cli" };
+  if (!ai && requireAi) return { verdict: "caution", reason: PENDING_REASON, locked: false, source: "pending" };
   if (!ai) {
     return { verdict: FROM_CLI[cli.verdict], reason: cli.reason, locked: false, source: "cli" };
   }
@@ -44,5 +51,5 @@ export function mergeVerdict({ blocked, category, cli, ai }: MergeInput): FinalV
 }
 
 export function selectable(f: FinalVerdict): boolean {
-  return !f.locked && f.verdict !== "keep";
+  return !f.locked && f.verdict !== "keep" && f.source !== "pending";
 }

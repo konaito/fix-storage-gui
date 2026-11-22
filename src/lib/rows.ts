@@ -28,3 +28,9 @@ export function toRow(item: ScanItem, ai?: AiJudgement): Row {
 export function withAi(row: Row, ai: AiJudgement | undefined): Row {
   return { ...row, ai, final: mergeVerdict({ blocked: row.blocked, category: row.category, cli: row.cli, ai }) };
 }
+
+/** The verdict to show and act on. Signed-in users with plan usage get "pending" until the AI has judged a row (#12). */
+export function forDisplay(row: Row, requireAi: boolean): Row {
+  if (!requireAi || row.ai) return row;
+  return { ...row, final: mergeVerdict({ blocked: row.blocked, category: row.category, cli: row.cli, requireAi }) };
+}

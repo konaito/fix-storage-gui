@@ -22,6 +22,8 @@ interface Props {
   disk: { total: number; available: number } | null;
   canResume: boolean;
   onResume: () => void;
+  /** "前回の一覧に戻る", or "前回の AI 判定に戻る" while the list waits for the AI (#12). */
+  resumeLabel: string;
 }
 
 export function TargetStep(p: Props) {
@@ -35,7 +37,7 @@ export function TargetStep(p: Props) {
       >
         {p.canResume && (
           <button type="button" onClick={p.onResume}>
-            前回の一覧に戻る
+            {p.resumeLabel}
           </button>
         )}
         <button type="button" className="primary large" onClick={p.onStart}>
