@@ -7,12 +7,15 @@
   --bg-sunken: #ececf0;
   --text: #1d1d1f;
   --text-2: #6e6e73;
-  --text-3: #8e8e93;
+  --text-3: #737378;
   --line: rgba(0, 0, 0, 0.09);
   --line-strong: rgba(0, 0, 0, 0.16);
   --accent: #0a84ff;
   --accent-strong: #0071e3;
   --accent-soft: rgba(10, 132, 255, 0.12);
+  /* Fill behind white text (primary button), dark enough for 4.5:1 in both themes (#44). --accent stays the text/link blue. */
+  --accent-fill: #006dda;
+  --accent-fill-hover: #0065cc;
   --danger: #e5383b;
   --danger-soft: rgba(229, 56, 59, 0.1);
   --ok: #1f9d55;
@@ -43,7 +46,7 @@
     --bg-sunken: #242426;
     --text: #f5f5f7;
     --text-2: #a1a1a6;
-    --text-3: #7c7c80;
+    --text-3: #949498;
     --line: rgba(255, 255, 255, 0.09);
     --line-strong: rgba(255, 255, 255, 0.18);
     --accent: #0a84ff;
@@ -94,8 +97,8 @@ button:hover:not(:disabled) { border-color: var(--text-3); }
 button:active:not(:disabled) { transform: translateY(0.5px); }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 1px; }
 button:disabled { opacity: 0.4; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-button.primary:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
+button.primary { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; font-weight: 600; }
+button.primary:hover:not(:disabled) { background: var(--accent-fill-hover); border-color: var(--accent-fill-hover); }
 button.danger { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
 button.large { padding: 9px 20px; font-size: 14px; border-radius: 10px; }
 button.link { border: none; background: none; color: var(--accent); padding: 2px 4px; box-shadow: none; }
@@ -400,9 +403,12 @@ button.chatgpt-button.login-cta { padding: 12px 30px; font-size: 16px; min-width
   --tile: #2f5fa8;
   --tile-hover: #3a6dbb;
   --tile-text: #ffffff;
-  --tile-safe: #34c759;
-  --tile-caution: #ff9f0a;
-  --tile-keep: #ff6961;
+  /* Verdict fills, shared by the tiles and the legend dots (#44). Hover goes darker so white text keeps 4.5:1. */
+  --tile-safe: #267f3c;
+  --tile-safe-hover: #237637;
+  --tile-caution: #99630e;
+  --tile-caution-hover: #8f5d0d;
+  --tile-keep: #4a4f63;
 }
 @media (prefers-color-scheme: dark) {
   :root { --map-bg: linear-gradient(160deg, #13284b, #0c1a33); --tile: #2a5291; --tile-hover: #335fa6; }
@@ -439,11 +445,11 @@ button.chatgpt-button.login-cta { padding: 12px 30px; font-size: 16px; min-width
 }
 .tile:hover { background: var(--tile-hover); }
 /* Verdict is the fill colour itself (no left-edge stripe). Locked tiles keep the diagonal stripes. */
-.tile.safe { background: #2f9e4a; }
-.tile.safe:hover { background: #35ad52; }
-.tile.caution { background: #c47f12; }
-.tile.caution:hover { background: #d48b18; }
-.tile.keep { background: #4a4f63; }
+.tile.safe { background: var(--tile-safe); }
+.tile.safe:hover { background: var(--tile-safe-hover); }
+.tile.caution { background: var(--tile-caution); }
+.tile.caution:hover { background: var(--tile-caution-hover); }
+.tile.keep { background: var(--tile-keep); }
 .tile.locked {
   background: repeating-linear-gradient(135deg, #3d4252 0 8px, #373b4a 8px 16px); color: rgba(255, 255, 255, 0.6); cursor: default;
 }
@@ -451,14 +457,16 @@ button.chatgpt-button.login-cta { padding: 12px 30px; font-size: 16px; min-width
 .tile.keep:hover, .tile.locked:hover { background-color: #50566b; }
 .tile.focus { box-shadow: 0 0 0 2px #fff, 0 0 0 5px rgba(10, 132, 255, 0.6); z-index: 3; }
 .tile:focus-visible { box-shadow: 0 0 0 2px #fff; z-index: 3; }
-.tile.on { background: #1f7a43; }
-.tile.on:hover { background: #218a4b; }
+/* Selected keeps its verdict fill; a white inner frame plus the ✓ shows it (#44). Combined with focus, both rings show. */
+.tile.on { box-shadow: inset 0 0 0 3px #fff; }
+.tile.on.focus { box-shadow: inset 0 0 0 3px #fff, 0 0 0 2px #fff, 0 0 0 5px rgba(10, 132, 255, 0.6); }
+.tile.on:focus-visible { box-shadow: inset 0 0 0 3px #fff, 0 0 0 2px #fff; }
 .tile-body {
   position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   padding: 6px 8px; text-align: center; pointer-events: none;
 }
 .tile-name { font-size: 12px; font-weight: 600; line-height: 1.25; max-width: 100%; white-space: nowrap; overflow: hidden; }
-.tile-size { font-size: 11px; opacity: 0.85; font-variant-numeric: tabular-nums; }
+.tile-size { font-size: 11px; font-variant-numeric: tabular-nums; }
 .tile-check {
   position: absolute; top: 5px; right: 5px; width: 18px; height: 18px; padding: 0; border-radius: 50%;
   border: 1.5px solid rgba(255, 255, 255, 0.75); background: rgba(0, 0, 0, 0.15); color: #1f7a43; font-size: 11px; font-weight: 800;
@@ -471,7 +479,7 @@ button.chatgpt-button.login-cta { padding: 12px 30px; font-size: 16px; min-width
 .dot-mark { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
 .dot-mark.safe { background: var(--tile-safe); }
 .dot-mark.caution { background: var(--tile-caution); }
-.dot-mark.keep { background: var(--tile-keep); }
+.dot-mark.keep { background: var(--tile-keep); filter: saturate(0.6); }
 .dot-mark.locked { background: repeating-linear-gradient(135deg, #8e8e93 0 3px, #636366 3px 6px); }
 .dot-mark.pending { background: var(--tile); }
 .ico { display: block; flex: none; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25)); }
