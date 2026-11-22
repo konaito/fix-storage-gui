@@ -19,7 +19,7 @@ const AUTO_CHECK_DELAY_MS = 3000;
 
 /**
  * アプリ内アップデートの通知カード（画面右下）。ログイン画面でもアプリ本体でも出る。
- * - 起動時に静かに確認し、新しいバージョンがあればバージョンとリリースノートを出す。
+ * - 起動時に静かに確認し、新しいバージョンがあればヘッダーのボタンで知らせる（押すとバージョンとリリースノートのカード）。
  * - アプリメニューの「アップデートを確認…」（Rust 側から `check-for-updates` イベント）でも確認する。
  * - スキャン・AI 判定・ゴミ箱移動の最中は自動で見つけた通知を出さず、インストールも始めない。
  */
@@ -74,7 +74,9 @@ export function UpdateBanner() {
       );
 
     case "available": {
-      if (s.blockedBy && !s.revealed) return null;
+      // 自動で見つけたときはヘッダーのボタン（「vX にアップデート」）だけを目立たせ、カードは出さない。
+      // 画面上部のメイン操作や右下の詳細パネルを覆わないよう、ユーザーが押したときだけカードを開く。
+      if (!s.revealed) return null;
       return (
         <Card>
           <div className="update-title">
@@ -176,8 +178,8 @@ export function UpdateCheckButton() {
   const p = s.phase;
   if (p.kind === "available") {
     return (
-      <button type="button" className="update-chip has-update" onClick={revealUpdate} title="アップデートの内容を見る">
-        v{p.info.version} にアップデート
+      <button type="button" className="update-chip has-update" onClick={revealUpdate} title="アップデートの内容を見る" aria-haspopup="dialog">
+        <span className="update-dot" aria-hidden="true" />v{p.info.version} にアップデート
       </button>
     );
   }

@@ -1,3 +1,4 @@
+import { StepBar } from "../ActionBar";
 import type { TrashOutcome } from "../../lib/api";
 import { formatBytes } from "../../lib/format";
 
@@ -16,11 +17,22 @@ export function DoneStep({ outcomes, movedBytes, error, remaining, onBackToList,
   const allFailed = ok.length === 0;
   return (
     <section className="step-page">
+      <StepBar
+        eyebrow="ステップ 6"
+        title={allFailed ? "ゴミ箱へ移動できませんでした" : "完了しました"}
+        desc={allFailed ? "下の理由を確認してください。何も削除されていません。" : "ゴミ箱を空にするまでは、いつでも元に戻せます。"}
+      >
+        <button type="button" onClick={onBackToList}>
+          一覧に戻る（残り {remaining} 件）
+        </button>
+        <button type="button" className="primary large" onClick={onRestart}>
+          別の場所をスキャンする
+        </button>
+      </StepBar>
       <div className={`done-hero ${allFailed ? "failed" : ""}`}>
         <div className="done-icon" aria-hidden="true">
           {allFailed ? "!" : "✓"}
         </div>
-        <div className="eyebrow">ステップ 6</div>
         <h2>{allFailed ? "ゴミ箱へ移動できませんでした" : `${ok.length} 件をゴミ箱へ移動しました`}</h2>
         {!allFailed && (
           <p className="big-number">
@@ -46,14 +58,6 @@ export function DoneStep({ outcomes, movedBytes, error, remaining, onBackToList,
           </ul>
         </details>
       )}
-      <div className="step-actions center">
-        <button type="button" onClick={onBackToList}>
-          一覧に戻る（残り {remaining} 件）
-        </button>
-        <button type="button" className="primary large" onClick={onRestart}>
-          別の場所をスキャンする
-        </button>
-      </div>
     </section>
   );
 }

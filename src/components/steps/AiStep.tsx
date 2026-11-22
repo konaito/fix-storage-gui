@@ -3,6 +3,7 @@ import { DEFAULT_CONCURRENCY } from "../../ai/runBatches";
 import { elapsedJa, ratio, type Bucket, type VerdictSummary } from "../../flow/progress";
 import { formatBytes } from "../../lib/format";
 import { AI_VERDICT_JA } from "../../lib/labels";
+import { StepBar } from "../ActionBar";
 import { LoadingPanel, ProgressBar } from "../Loader";
 
 export interface AiRun {
@@ -37,7 +38,6 @@ interface Props {
   selectedCount: number;
   onOpenSend: () => void;
   /** Re-consent to ChatGPT plan usage (from the login gate). */
-  onEnablePlan?: () => void;
   onStop: () => void;
   onGoReview: () => void;
   onGoTrash: () => void;
@@ -49,28 +49,56 @@ export function AiStep(p: Props) {
 
   return (
     <section className="step-page">
-      <header className="step-head">
-        <div className="eyebrow">ステップ 4（任意）</div>
-        <h2>AI に判定してもらう</h2>
-        <p className="muted">
-          ファイル名・パス・サイズ・日付・元 CLI の判定といった<strong>メタデータだけ</strong>を {p.destination} に送り、ゴミ箱に移してよいかの意見をもらいます。
-          <strong>ファイルの中身は送りません。</strong>送る前に、実際に送る内容をすべて確認できます。
-        </p>
-      </header>
+      <StepBar
+        eyebrow="ステップ 4（任意）"
+        title={p.outcome ? (p.outcome.error ? "AI 判定を完了できませんでした" : p.outcome.stopped ? "AI 判定を途中で中止しました" : "AI 判定が終わりました") : "AI に判定してもらう"}
+        desc={
+          <>
+            ファイル名・サイズ・日付などの<strong>メタデータだけ</strong>を {p.destination} に送ります。ファイルの中身は送りません。
+          </>
+        }
+      >
+        {p.outcome ? (
+          <>
+            <button type="button" onClick={p.onOpenSend} disabled={!(p.planReady && !!p.modelName && p.targets > 0)}>
+              もう一度判定する…
+            </button>
+            <button type="button" className="primary large" onClick={p.onGoReview}>
+              結果を一覧で確認する →
+            </button>
+          </>
+        ) : p.planReady && !!p.modelName && p.targets > 0 ? (
+          <>
+            <button type="button" onClick={p.onGoReview}>
+              ← 一覧に戻る
+            </button>
+            <button type="button" className="primary large" onClick={p.onOpenSend}>
+              送信内容を確認する…
+            </button>
+          </>
+        ) : (
+          <>
+            <button type="button" onClick={p.onGoTrash} disabled={p.selectedCount === 0} title={p.selectedCount === 0 ? "一覧で項目を選ぶと進めます" : undefined}>
+              AI なしでゴミ箱の確認へ（{p.selectedCount} 件）
+            </button>
+            <button type="button" className="primary large" onClick={p.onGoReview}>
+              ← 一覧に戻る
+            </button>
+          </>
+        )}
+      </StepBar>
+      {!p.outcome && p.planReady && <p className="muted small lead">送る前に、実際に送る内容（JSON）をすべて確認できます。AI の判定は参考で、保護リストと元 CLI のルールが常に優先されます。</p>}
 
       {p.outcome && (
         <div className={`result-card ${p.outcome.error ? "error-card" : ""}`}>
           {p.outcome.error ? (
             <>
-              <h3>AI 判定を完了できませんでした</h3>
               <p>{p.outcome.error}</p>
               {p.outcome.judged > 0 && <p className="muted small">{p.outcome.judged} 件は判定済みで、一覧に反映しています。</p>}
             </>
           ) : (
             <>
-              <h3>
-                {p.outcome.stopped ? "途中で中止しました" : "AI 判定が終わりました"}（{p.outcome.judged} 件）
-              </h3>
+              <h3>{p.outcome.judged} 件を判定しました</h3>
               {p.outcome.missing > 0 && <p className="muted small">{p.outcome.missing} 件は AI の応答に含まれていなかったため、元 CLI の判定のままです。</p>}
             </>
           )}
@@ -91,7 +119,7 @@ export function AiStep(p: Props) {
 
       {!p.signedIn ? (
         <div className="callout">
-          <strong>ChatGPT にサインインすると使えます。</strong>右の「ChatGPT プランを使う」からサインインしてください。AI を使わずに次へ進むこともできます。
+          <strong>ChatGPT にサインインすると使えます。</strong>右の「ChatGPT プランを使う」からサインインしてください。AI を使わずに一覧へ戻ることもできます。
         </div>
       ) : !p.planReady ? (
         <div className="callout warn-box">
@@ -99,11 +127,7 @@ export function AiStep(p: Props) {
             <strong>ルール判定のみモードです。</strong>このアカウントでは ChatGPT プランの使用が許可されていないため、AI 判定はオフです。OpenAI
             には何も送りません。判定は元 CLI のルールとハードブロックだけで行っています。このステップは飛ばして、そのまま一覧やゴミ箱へ移動の確認に進めます。
           </p>
-          {p.onEnablePlan && (
-            <button type="button" className="chatgpt-button" onClick={p.onEnablePlan}>
-              ChatGPT プランの利用を有効にする
-            </button>
-          )}
+          <p className="small">AI 判定を使うには、画面上部のバーの「ChatGPT プランの利用を有効にする」から許可してください。</p>
         </div>
       ) : p.modelsLoading ? (
         <div className="callout row">
@@ -120,33 +144,6 @@ export function AiStep(p: Props) {
         </div>
       )}
 
-      <div className="step-actions">
-        {p.outcome ? (
-          <>
-            <button type="button" onClick={p.onOpenSend} disabled={!p.planReady || !p.modelName || p.targets === 0}>
-              もう一度判定する…
-            </button>
-            <button type="button" onClick={p.onGoTrash} disabled={p.selectedCount === 0} title={p.selectedCount === 0 ? "一覧で項目を選ぶと進めます" : undefined}>
-              ゴミ箱へ移動の確認へ（{p.selectedCount} 件）
-            </button>
-            <button type="button" className="primary large" onClick={p.onGoReview}>
-              結果を一覧で確認する →
-            </button>
-          </>
-        ) : (
-          <>
-            <button type="button" onClick={p.onGoReview}>
-              ← 一覧に戻る
-            </button>
-            <button type="button" onClick={p.onGoTrash} disabled={p.selectedCount === 0} title={p.selectedCount === 0 ? "一覧で項目を選ぶと進めます" : undefined}>
-              AI を使わずにゴミ箱へ移動の確認へ（{p.selectedCount} 件）
-            </button>
-            <button type="button" className="primary large" onClick={p.onOpenSend} disabled={!p.planReady || !p.modelName || p.targets === 0}>
-              送信内容を確認する…
-            </button>
-          </>
-        )}
-      </div>
     </section>
   );
 }
@@ -159,17 +156,22 @@ function AiRunning({ run, destination, onStop }: { run: AiRun; destination: stri
   }, []);
   return (
     <section className="step-page">
-      <LoadingPanel
+      <StepBar
+        eyebrow="ステップ 4（任意）"
+        busy
         title={run.stopRequested ? "送信中の分が終わったら中止します…" : "AI が判定しています"}
-        footer={
-          <>
-            <span className="muted small">経過 {elapsedJa(now - run.startedAt)}</span>
-            <button type="button" onClick={onStop} disabled={run.stopRequested}>
-              {run.stopRequested ? "中止を待っています…" : "中止（送信中の分が終わったら）"}
-            </button>
-          </>
+        desc="送っているのはメタデータだけです。結果はバッチごとに一覧へ反映されます。"
+        meta={
+          <span className="num">
+            {run.done} / {run.total} 件・経過 {elapsedJa(now - run.startedAt)}
+          </span>
         }
       >
+        <button type="button" onClick={onStop} disabled={run.stopRequested}>
+          {run.stopRequested ? "中止を待っています…" : "中止（送信中の分が終わったら）"}
+        </button>
+      </StepBar>
+      <LoadingPanel>
         <div className="row space small">
           <span>
             判定済み <strong>{run.done}</strong> / {run.total} 件
@@ -190,7 +192,6 @@ function AiRunning({ run, destination, onStop }: { run: AiRun; destination: stri
             <span className="muted">{destination} の応答を待っています…</span>
           )}
         </div>
-        <p className="muted small">送っているのはメタデータだけです。結果はバッチごとに一覧へ反映されます。</p>
       </LoadingPanel>
     </section>
   );

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { api, isSiwcError, type SiwcStatus } from "../lib/api";
 import { describeError } from "../lib/errors";
@@ -10,8 +10,6 @@ interface SiwcChanged {
   reason: "signed_in" | "signed_out" | "switched";
   remoteRevoked: boolean | null;
 }
-
-type Attempt = { clientId: string | null; promptConsent: boolean };
 
 /**
  * Sign in with ChatGPT is required: nothing inside `children` is rendered until the
@@ -28,7 +26,6 @@ export function LoginGate({ children }: { children: ReactNode }) {
   const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState<{ message: string; cancelled: boolean } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const lastAttempt = useRef<Attempt>({ clientId: null, promptConsent: false });
   const [statusVersion, setStatusVersion] = useState(0);
   // Per-session copy of the remembered "continue without plan usage" choices.
   const [ruleOnly, setRuleOnly] = useState<Record<string, boolean>>({});
@@ -65,7 +62,6 @@ export function LoginGate({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   async function signIn(clientId: string | null, promptConsent: boolean) {
-    lastAttempt.current = { clientId, promptConsent };
     setError(null);
     setNotice(null);
     setSigningIn(true);
@@ -98,6 +94,7 @@ export function LoginGate({ children }: { children: ReactNode }) {
     const enablePlan = () => void signIn(account.clientId, true);
     return (
       <GateContext.Provider value={{ planEnabled: view.kind === "ready", ruleOnly: view.kind !== "ready", statusVersion, enablePlan }}>
+        <div className="gate-shell">
         {view.kind === "plan_disabled" && (
           <RuleOnlyBar
             label={account.label}
@@ -109,6 +106,7 @@ export function LoginGate({ children }: { children: ReactNode }) {
           />
         )}
         {children}
+        </div>
       </GateContext.Provider>
     );
   }
@@ -121,7 +119,6 @@ export function LoginGate({ children }: { children: ReactNode }) {
       error={error}
       notice={notice}
       onSignIn={(id, consent) => void signIn(id, consent)}
-      onRetry={() => void signIn(lastAttempt.current.clientId, lastAttempt.current.promptConsent)}
       onCancelSignIn={() => void api.siwcCancelSignIn()}
       onReload={() => {
         setLoadError(null);
@@ -151,26 +148,29 @@ function RuleOnlyBar(p: {
 }) {
   return (
     <div className="rule-only-bar" role="status">
-      <div>
+      <span className="rule-only-text">
         <strong>ルール判定のみモード</strong>
-        <span className="muted small">（{p.label}）</span>
-        <div className="small">
-          このアカウントは ChatGPT プランの使用を許可していないため、AI 判定はオフです。判定は元 CLI のルールとハードブロックだけで行い、OpenAI には何も送りません。
-        </div>
+        <span className="muted">（{p.label}）</span>
+        <span
+          className="muted rule-only-desc"
+          title="このアカウントは ChatGPT プランの使用を許可していないため、AI 判定はオフです。判定は元 CLI のルールとハードブロックだけで行い、OpenAI には何も送りません。"
+        >
+          AI 判定はオフです。OpenAI には何も送りません。
+        </span>
         {p.error && (
-          <div className="small warn">
+          <span className="warn">
             {p.error} <button className="link" onClick={p.onDismissError}>閉じる</button>
-          </div>
+          </span>
         )}
-      </div>
+      </span>
       {p.signingIn ? (
-        <div className="row">
-          <span className="spinner" aria-hidden="true" />
+        <span className="row">
+          <span className="spinner tiny-spin" aria-hidden="true" />
           <span className="small">ブラウザで許可してください…</span>
-          <button onClick={p.onCancel}>中止</button>
-        </div>
+          <button className="small-btn" onClick={p.onCancel}>中止</button>
+        </span>
       ) : (
-        <button className="chatgpt-button" onClick={p.onEnable}>
+        <button className="chatgpt-button small-btn" onClick={p.onEnable}>
           ChatGPT プランの利用を有効にする
         </button>
       )}

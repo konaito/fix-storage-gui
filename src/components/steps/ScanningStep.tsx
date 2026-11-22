@@ -1,3 +1,4 @@
+import { StepBar } from "../ActionBar";
 import { useEffect, useState } from "react";
 import { elapsedJa, phaseStates, ratio, SCAN_PHASES } from "../../flow/progress";
 import type { ScanProgress } from "../../lib/api";
@@ -24,17 +25,18 @@ export function ScanningStep({ target, progress, startedAt, cancelling, onCancel
 
   return (
     <section className="step-page">
-      <LoadingPanel
+      <StepBar
+        eyebrow="ステップ 2"
+        busy
         title={cancelling ? "中止しています…" : target.kind === "mac" ? "Mac 全体をスキャンしています" : "フォルダをスキャンしています"}
-        footer={
-          <>
-            <span className="muted small">経過 {elapsedJa(now - startedAt)}</span>
-            <button type="button" onClick={onCancel} disabled={cancelling}>
-              {cancelling ? "中止しています…" : "中止（途中までの結果を表示）"}
-            </button>
-          </>
-        }
+        desc="サイズを計測しています。すべてこの Mac の中で行います。"
+        meta={<span className="num">経過 {elapsedJa(now - startedAt)}</span>}
       >
+        <button type="button" onClick={onCancel} disabled={cancelling}>
+          {cancelling ? "中止しています…" : "中止（途中までの結果を表示）"}
+        </button>
+      </StepBar>
+      <LoadingPanel>
         {target.kind === "folder" && <CurrentPath path={target.path} />}
         <ol className="phase-list">
           {SCAN_PHASES.map((ph) => {

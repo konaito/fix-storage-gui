@@ -112,10 +112,7 @@ export function AccountPanel(p: Props) {
         </div>
       ) : (
         <div className="warn-box">
-          <p>このアカウントでは ChatGPT プランの利用が許可されていないため、AI 判定は使えません（元 CLI のルール判定は使えます）。</p>
-          <button className="chatgpt-button" onClick={() => p.onSignIn(active.clientId, true)}>
-            ChatGPT プランの利用を有効にする
-          </button>
+          <p className="small">ChatGPT プランの利用が許可されていないため、AI 判定はオフです（元 CLI のルール判定は使えます）。有効にするには画面上部のバーから許可してください。</p>
         </div>
       )}
     </div>

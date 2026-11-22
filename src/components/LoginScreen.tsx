@@ -1,5 +1,7 @@
 import type { AccountView } from "../lib/api";
 import { SIWC_DOCS, type GateView } from "../lib/gate";
+import { TopBar } from "./ActionBar";
+import { UpdateCheckButton } from "./UpdateBanner";
 
 interface Props {
   view: Exclude<GateView, { kind: "ready" }>;
@@ -8,7 +10,6 @@ interface Props {
   error: { message: string; cancelled: boolean } | null;
   notice: string | null;
   onSignIn: (clientId: string | null, promptConsent: boolean) => void;
-  onRetry: () => void;
   onCancelSignIn: () => void;
   onReload: () => void;
   onSignOut: () => void;
@@ -18,77 +19,130 @@ interface Props {
   onManageUsage: () => void;
 }
 
-/** First screen: Sign in with ChatGPT is required before anything else is shown. */
+/**
+ * First screen: Sign in with ChatGPT is required before anything else is shown.
+ * Same chrome as the app: title + one-line explanation on the left and the main action top-right.
+ */
 export function LoginScreen(p: Props) {
-  if (p.view.kind === "checking") {
-    return (
-      <div className="login-wrap">
-        <div className="card login-loading" role="status" aria-live="polite">
-          <span className="spinner" aria-hidden="true" />
-          <div>
-            <strong>サインイン状態を確認しています…</strong>
-            <div className="muted small">キーチェーンに保存されたサインイン情報を読み込んでいます。</div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="login-wrap">
-      <header className="login-header">
-        <h1>Fix Storage GUI</h1>
-        <div className="muted small">fix-storage のコアを使ったストレージ整理 ・ Sign in with ChatGPT のデモアプリ</div>
-      </header>
-
-      {p.notice && (
-        <div className="notice" role="status">
-          {p.notice} <button className="link" onClick={p.onDismissNotice}>閉じる</button>
+    <div className="login-shell">
+      <header className="app-bar">
+        <div className="brand">
+          <div className="app-icon" aria-hidden="true">
+            ◐
+          </div>
+          <h1>Fix Storage</h1>
         </div>
-      )}
-
-      <div className="login-grid">
-        <section className="card login-card" aria-labelledby="login-title">
-          <SignInPanel {...p} />
-        </section>
-        <Docs onOpenDoc={p.onOpenDoc} onManageUsage={p.onManageUsage} />
+        <div className="app-bar-tools">
+          <UpdateCheckButton />
+        </div>
+      </header>
+      <div className="topbar-slot">
+        <LoginBar {...p} />
+      </div>
+      <div className="login-body">
+        {p.notice && (
+          <div className="notice" role="status">
+            {p.notice} <button className="link" onClick={p.onDismissNotice}>閉じる</button>
+          </div>
+        )}
+        <div className="login-grid">
+          <section className="card login-card" aria-label="サインイン">
+            <SignInDetails {...p} />
+          </section>
+          <Docs onOpenDoc={p.onOpenDoc} onManageUsage={p.onManageUsage} />
+        </div>
       </div>
     </div>
   );
 }
 
-function SignInPanel(p: Props) {
+function LoginBar(p: Props) {
   const v = p.view;
+  if (v.kind === "checking") {
+    return <TopBar busy title="サインイン状態を確認しています…" desc="キーチェーンに保存されたサインイン情報を読み込んでいます。" />;
+  }
+  if (v.kind === "load_error") {
+    return (
+      <TopBar title="サインイン状態を確認できませんでした" desc="下の理由を確認して、もう一度お試しください。">
+        <button className="primary large" onClick={p.onReload}>
+          もう一度確認する
+        </button>
+      </TopBar>
+    );
+  }
+  if (p.signingIn) {
+    return (
+      <TopBar busy title="ブラウザでサインインしてください" desc="ChatGPT のサインイン画面をブラウザで開きました。許可を終えたら、このアプリに戻ってきてください。">
+        <button onClick={p.onCancelSignIn}>中止</button>
+      </TopBar>
+    );
+  }
+  if (v.kind === "plan_disabled") {
+    return (
+      <TopBar
+        title="ChatGPT プランの利用が許可されていません"
+        desc={
+          <>
+            <strong>{v.account.label}</strong> でサインイン中です。AI 判定を使うには、ChatGPT プランの使用を許可してください。
+          </>
+        }
+      >
+        <button onClick={() => p.onContinueWithoutPlan(v.account.clientId)}>AI 判定なしで続ける</button>
+        <button className="chatgpt-button large" onClick={() => p.onSignIn(v.account.clientId, true)}>
+          ChatGPT プランの利用を有効にする
+        </button>
+      </TopBar>
+    );
+  }
+  const reauth = v.reauth;
+  const others = p.saved.filter((a) => a.clientId !== reauth?.clientId);
+  const choices = reauth ? others : p.saved;
+  return (
+    <TopBar title="ChatGPT でサインイン" desc="AI 判定は、あなたの ChatGPT プランの使用量で動きます。アプリ自体は無料で、API キーも不要です。">
+      {choices.length > 0 && (
+        <select aria-label="保存済みのアカウント" value="" onChange={(e) => e.target.value && p.onSignIn(e.target.value, false)}>
+          <option value="">保存済みのアカウントで続ける…</option>
+          {choices.map((a) => (
+            <option key={a.clientId} value={a.clientId}>
+              {a.label}
+            </option>
+          ))}
+        </select>
+      )}
+      <button className="chatgpt-button large" onClick={() => p.onSignIn(reauth ? reauth.clientId : null, false)}>
+        Continue with ChatGPT
+      </button>
+    </TopBar>
+  );
+}
+
+/** Explanations for the current state. The actions themselves are only in the top bar. */
+function SignInDetails(p: Props) {
+  const v = p.view;
+
+  if (v.kind === "checking") {
+    return <p className="muted">しばらくお待ちください。</p>;
+  }
 
   if (v.kind === "load_error") {
     return (
-      <>
-        <h2 id="login-title">サインイン状態を確認できませんでした</h2>
-        <div className="error" role="alert">{v.message}</div>
-        <button className="primary" onClick={p.onReload}>
-          もう一度確認する
-        </button>
-      </>
+      <div className="error" role="alert">
+        {v.message}
+      </div>
     );
   }
 
   if (p.signingIn) {
     return (
       <>
-        <h2 id="login-title">ブラウザでサインインしてください</h2>
-        <div className="login-loading inline" role="status" aria-live="polite">
-          <span className="spinner" aria-hidden="true" />
-          <div>
-            <strong>ChatGPT のサインイン画面をブラウザで開きました</strong>
-            <div className="muted small">サインインと許可を終えたら、このアプリに戻ってきてください。ブラウザが開かないときは中止してやり直してください。</div>
-          </div>
-        </div>
+        <h3>サインインの流れ</h3>
         <ol className="login-steps small">
           <li>ブラウザで ChatGPT アカウントにサインイン</li>
           <li>許可内容（ChatGPT プランの使用）を確認して許可</li>
           <li>このアプリに戻ると、自動で次の画面に進みます</li>
         </ol>
-        <button onClick={p.onCancelSignIn}>中止</button>
+        <p className="muted small">ブラウザが開かないときは、右上の「中止」を押してやり直してください。</p>
       </>
     );
   }
@@ -96,20 +150,10 @@ function SignInPanel(p: Props) {
   if (v.kind === "plan_disabled") {
     return (
       <>
-        <h2 id="login-title">ChatGPT プランの利用が許可されていません</h2>
-        <p>
-          <strong>{v.account.label}</strong> でサインインしていますが、ChatGPT プランの使用が許可されていません。AI 判定を使うには、ブラウザの許可画面で「ChatGPT
-          プランの使用」を許可してください。
-        </p>
-        {p.error && <ErrorBox {...p} />}
-        <div className="login-actions">
-          <button className="chatgpt-button" onClick={() => p.onSignIn(v.account.clientId, true)}>
-            ChatGPT プランの利用を有効にする
-          </button>
-          <button onClick={() => p.onContinueWithoutPlan(v.account.clientId)}>AI 判定なしで続ける（ルール判定のみ）</button>
-        </div>
+        {p.error && <ErrorBox error={p.error} />}
+        <p>ブラウザの許可画面で「ChatGPT プランの使用」を許可すると、AI 判定が使えるようになります。</p>
         <p className="muted small">
-          AI 判定なしで続けると、元 CLI のルールとハードブロックだけで判定します。OpenAI には何も送りません。あとからアプリ内でいつでも ChatGPT プランの利用を有効にできます。
+          「AI 判定なしで続ける」を選ぶと、元 CLI のルールとハードブロックだけで判定します。OpenAI には何も送りません。あとからアプリ内でいつでも有効にできます。
         </p>
         <button className="link" onClick={p.onSignOut}>
           サインアウト
@@ -118,65 +162,32 @@ function SignInPanel(p: Props) {
     );
   }
 
-  // signed_out
-  const reauth = v.kind === "signed_out" ? v.reauth : null;
-  const others = p.saved.filter((a) => a.clientId !== reauth?.clientId);
+  const reauth = v.reauth;
   return (
     <>
-      <h2 id="login-title">ChatGPT プランを使う</h2>
+      {reauth && <p className="warn">前回のサインイン（{reauth.label}）が使えなくなりました。もう一度サインインしてください。</p>}
+      {p.error && <ErrorBox error={p.error} />}
       <p>
-        このアプリの AI 判定は、あなたの ChatGPT プラン（またはクレジット残高）に含まれる使用量で動きます。まず ChatGPT でサインインしてください。
+        このアプリの AI 判定は、あなたの ChatGPT プラン（またはクレジット残高）に含まれる使用量で動きます。右上の「Continue with ChatGPT」からサインインしてください。
       </p>
-      <p className="muted small">このアプリ自体に料金はかかりません。API キーも不要です。</p>
-
-      {reauth && (
-        <p className="warn">
-          前回のサインイン（{reauth.label}）が使えなくなりました。もう一度サインインしてください。
-        </p>
-      )}
-      {p.error && <ErrorBox {...p} />}
-
-      <div className="login-actions">
-        {reauth ? (
-          <button className="chatgpt-button" onClick={() => p.onSignIn(reauth.clientId, false)}>
-            Continue with ChatGPT
-          </button>
-        ) : (
-          <button className="chatgpt-button" onClick={() => p.onSignIn(null, false)}>
-            Continue with ChatGPT
-          </button>
-        )}
-        {(reauth ? others.length > 0 : p.saved.length > 0) && (
-          <select aria-label="保存済みのアカウント" value="" onChange={(e) => e.target.value && p.onSignIn(e.target.value, false)}>
-            <option value="">保存済みのアカウントで続ける…</option>
-            {(reauth ? others : p.saved).map((a) => (
-              <option key={a.clientId} value={a.clientId}>
-                {a.label}
-              </option>
-            ))}
-          </select>
-        )}
-        {reauth && (
-          <button className="link" onClick={() => p.onSignIn(null, false)}>
-            別のアカウントでサインイン
-          </button>
-        )}
-      </div>
       <p className="muted small">ボタンを押すとブラウザが開きます。初回は、ブラウザでこのアプリの登録と許可内容を確認します。</p>
+      {reauth && (
+        <button className="link" onClick={() => p.onSignIn(null, false)}>
+          別のアカウントでサインイン
+        </button>
+      )}
     </>
   );
 }
 
-function ErrorBox(p: Props) {
-  if (!p.error) return null;
+/** The retry is the top bar's main action, so the error box only explains. */
+function ErrorBox({ error }: { error: { message: string; cancelled: boolean } }) {
   return (
-    <div className={p.error.cancelled ? "notice" : "error"} role="alert">
-      {p.error.message}
-      <div className="row">
-        <button className="primary" onClick={p.onRetry}>
-          もう一度試す
-        </button>
-      </div>
+    <div className={error.cancelled ? "notice" : "error"} role="alert">
+      <span>
+        {error.message}
+        {error.cancelled ? "" : " 右上のボタンからもう一度お試しください。"}
+      </span>
     </div>
   );
 }

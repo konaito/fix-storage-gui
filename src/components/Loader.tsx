@@ -22,13 +22,15 @@ export function ProgressBar({ value, label }: { value: number | null; label?: st
 }
 
 /** Large centred loading panel used for every async phase. */
-export function LoadingPanel({ title, children, footer }: { title: string; children?: ReactNode; footer?: ReactNode }) {
+export function LoadingPanel({ title, children, footer }: { title?: string; children?: ReactNode; footer?: ReactNode }) {
   return (
     <div className="loading-panel" aria-live="polite">
-      <div className="loading-head">
-        <Spinner size={28} />
-        <h2>{title}</h2>
-      </div>
+      {title && (
+        <div className="loading-head">
+          <Spinner size={28} />
+          <h2>{title}</h2>
+        </div>
+      )}
       {children}
       {footer && <div className="loading-foot">{footer}</div>}
     </div>
