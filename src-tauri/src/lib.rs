@@ -21,8 +21,27 @@ struct AppState {
     preview_gen: Arc<std::sync::atomic::AtomicU64>,
 }
 
-fn home() -> String {
-    std::env::var("HOME").unwrap_or_else(|_| "/".into())
+/// The home folder: $HOME, or the account's home from the user database when $HOME is unset.
+/// Never "/" or empty: with those, "inside the home folder" would match every path.
+fn home() -> Result<String, String> {
+    if let Ok(h) = std::env::var("HOME") {
+        if safety::home_ok(&h) {
+            return Ok(h);
+        }
+    }
+    passwd_home().filter(|h| safety::home_ok(h)).ok_or_else(|| "ホームフォルダが分からないため、スキャンも移動もしません".into())
+}
+
+fn passwd_home() -> Option<String> {
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut buf = vec![0 as libc::c_char; 4096];
+    let mut out: *mut libc::passwd = std::ptr::null_mut();
+    let rc = unsafe { libc::getpwuid_r(libc::getuid(), &mut pwd, buf.as_mut_ptr(), buf.len(), &mut out) };
+    if rc != 0 || out.is_null() || pwd.pw_dir.is_null() {
+        return None;
+    }
+    let dir = unsafe { std::ffi::CStr::from_ptr(pwd.pw_dir) };
+    dir.to_str().ok().map(str::to_string)
 }
 
 #[derive(Serialize)]
@@ -36,7 +55,7 @@ struct EnvInfo {
 
 #[tauri::command]
 fn env_info() -> EnvInfo {
-    let home = home();
+    let home = home().unwrap_or_default();
     let user = home.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
     EnvInfo { home, user, os: std::env::consts::OS, version: env!("CARGO_PKG_VERSION") }
 }
@@ -68,7 +87,7 @@ async fn scan(
         Some(f) => Some(safety::normalize(&f).ok_or("正しいフォルダではありません")?),
         None => None,
     };
-    let opts = scan::ScanOptions { home: home(), folder, min_size, limit: 400 };
+    let opts = scan::ScanOptions { home: home()?, folder, min_size, limit: 400 };
     let emitter = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         scan::run_scan(opts, cancel, move |progress| {
@@ -84,7 +103,7 @@ async fn scan(
 async fn preview_item(state: State<'_, AppState>, path: String) -> Result<preview::PreviewResult, String> {
     let gen = state.preview_gen.fetch_add(1, Ordering::SeqCst) + 1;
     let current = state.preview_gen.clone();
-    let h = home();
+    let h = home()?;
     tauri::async_runtime::spawn_blocking(move || preview::preview(&path, &h, gen, current)).await.map_err(|e| e.to_string())
 }
 
@@ -102,7 +121,7 @@ fn cancel_scan(state: State<'_, AppState>) {
 
 #[tauri::command]
 async fn move_to_trash(app: tauri::AppHandle, paths: Vec<String>) -> Result<Vec<trash::TrashOutcome>, String> {
-    let h = home();
+    let h = home()?;
     tauri::async_runtime::spawn_blocking(move || {
         let out = trash::move_to_trash(&paths, &h, |done, total, current| {
             let _ = app.emit("trash-progress", TrashProgress { done, total, current: current.to_string() });
@@ -287,5 +306,11 @@ mod tests {
         assert!(r.is_err(), "missing path was reported as revealed");
         // #63: the window adds "Finder で表示できませんでした: " in front, so the Rust side returns only the reason.
         assert!(!r.unwrap_err().starts_with("Finder で表示できませんでした"));
+    }
+
+    #[test]
+    fn passwd_home_is_usable() {
+        let h = super::passwd_home().expect("home from the user database");
+        assert!(crate::safety::home_ok(&h), "{h}");
     }
 }
