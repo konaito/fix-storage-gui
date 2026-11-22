@@ -28,6 +28,8 @@ export interface AiJudgement {
 
 export interface JudgeOptions {
   model: string;
+  /** Account the run started with; every request of the run uses it (#28). */
+  clientId: string;
   /** Called with the number of characters received so far. */
   onProgress?: (chars: number) => void;
   /** Aborting it cancels the request (the run was stopped). */
