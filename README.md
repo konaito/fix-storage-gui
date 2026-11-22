@@ -127,16 +127,25 @@ npx tauri build --target universal-apple-darwin --bundles app,dmg --config '{"bu
 ```
 
 GitHub Actions（どちらも macos-latest）:
-- `Build macOS`: main への push ごとにテストと universal の `.app` / `.dmg` ビルドを行い、artifact として保存します（ad-hoc 署名・未公証）。
+- `Build macOS`: main への push、PR、手動実行のたびに、版番号の一致の検査、テスト、universal の `.app` / `.dmg` ビルドを行い、artifact として保存します（ad-hoc 署名・未公証）。
 - `Release`: `v*` タグの push で GitHub Release を作り、universal の `.dmg` と、アプリ内アップデート用の署名付き `.app.tar.gz` / `.sig` / `latest.json` を添付します（[tauri-apps/tauri-action](https://github.com/tauri-apps/tauri-action) を使用）。下の Secrets が設定されていれば Developer ID で署名して公証し、なければ ad-hoc 署名（未公証）でビルドします。
 
 ### リリースの出し方
 
-`src-tauri/tauri.conf.json`・`src-tauri/Cargo.toml`・`package.json` の `version` を上げてコミットし、同じ番号のタグを push します（タグとバージョンが違うと Release ワークフローは止まります）。
+版番号は `package.json`、`package-lock.json`（2か所）、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` に書かれています。手で直さず、`scripts/bump-version.mjs` で一度に書き換えます。版番号がファイルごとにずれていると、`Build macOS` の検査（`scripts/check-version.mjs`）で止まります。
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+VERSION=X.Y.Z                            # 新しい版番号（先頭に v を付けない）
+node scripts/bump-version.mjs "$VERSION" # 版番号を全ファイルで書き換える
+node scripts/check-version.mjs           # 全ファイルでそろったかを確かめる
+# 書き換えた版ファイルをコミットし、PR で main に入れる
+```
+
+main に入ったら、同じ番号のタグを push します。タグと `tauri.conf.json` の版番号が違うと、Release ワークフローは止まります。
+
+```bash
+git tag "v$VERSION"
+git push origin "v$VERSION"
 ```
 
 ## 公証の有効化手順
