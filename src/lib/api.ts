@@ -11,6 +11,8 @@ export interface ScanItem {
   lastUsedMs: number | null;
   /** Hard block reason from the Rust side. Such items can never be moved to the Trash. */
   blocked: string | null;
+  /** Holds a file with more than one hard link (#34), so the Trash may free less than `size`. */
+  shared: boolean;
 }
 
 export interface ScanResult {
@@ -21,6 +23,8 @@ export interface ScanResult {
 }
 
 export interface ScanProgress {
+  /** The `scanId` passed to `api.scan` for the scan that sent this event. */
+  scanId: number;
   /** Which part of the scan is running (see src-tauri/src/scan.rs). total is 0 while listing (unknown). */
   phase: "listing" | "measuring" | "dates";
   current: string;
@@ -103,7 +107,8 @@ export function isSiwcError(e: unknown): e is SiwcError {
 
 export const api = {
   envInfo: () => invoke<EnvInfo>("env_info"),
-  scan: (folder: string | null, minSize: number) => invoke<ScanResult>("scan", { folder, minSize }),
+  /** `scanId` is echoed in this scan's `scan-progress` events, so events from an earlier scan can be ignored. */
+  scan: (folder: string | null, minSize: number, scanId: number) => invoke<ScanResult>("scan", { folder, minSize, scanId }),
   cancelScan: () => invoke<void>("cancel_scan"),
   previewItem: (path: string) => invoke<PreviewResult>("preview_item", { path }),
   cancelPreview: () => invoke<void>("cancel_preview"),

@@ -152,7 +152,7 @@ export function AiStep(p: Props) {
               ))}
             </div>
           )}
-          <p className="muted small">保護リストと元 CLI のルールが常に優先されます。AI が「削除していい」と言っても、個人データや使用中のデータは「注意」に下げています。</p>
+          <p className="muted small">保護リストと元 CLI のルールが常に優先されます。AI が「削除していい」と言っても、元 CLI が「不要」と判定したもの以外は「注意」に下げています。</p>
         </div>
       )}
 
