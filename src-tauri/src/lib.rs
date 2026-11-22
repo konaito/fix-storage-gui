@@ -65,9 +65,25 @@ fn cancel_scan(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-async fn move_to_trash(paths: Vec<String>) -> Result<Vec<trash::TrashOutcome>, String> {
+async fn move_to_trash(app: tauri::AppHandle, paths: Vec<String>) -> Result<Vec<trash::TrashOutcome>, String> {
     let h = home();
-    tauri::async_runtime::spawn_blocking(move || trash::move_to_trash(&paths, &h)).await.map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = trash::move_to_trash(&paths, &h, |done, total, current| {
+            let _ = app.emit("trash-progress", TrashProgress { done, total, current: current.to_string() });
+        });
+        let _ = app.emit("trash-progress", TrashProgress { done: paths.len(), total: paths.len(), current: String::new() });
+        out
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrashProgress {
+    done: usize,
+    total: usize,
+    current: String,
 }
 
 #[tauri::command]

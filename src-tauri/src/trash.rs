@@ -41,11 +41,15 @@ fn move_one(path: &str) -> Result<(), String> {
 }
 
 /// Re-checks the hard block list for every path right before moving it.
-pub fn move_to_trash(paths: &[String], home: &str) -> Vec<TrashOutcome> {
+/// `on_progress(done, total, current)` is called before each item.
+pub fn move_to_trash(paths: &[String], home: &str, on_progress: impl Fn(usize, usize, &str)) -> Vec<TrashOutcome> {
     let roots = mac_roots(home);
+    let total = paths.len();
     paths
         .iter()
-        .map(|path| {
+        .enumerate()
+        .map(|(i, path)| {
+            on_progress(i, total, path);
             if let Some(why) = cannot_remove(path, home, &roots, true) {
                 return TrashOutcome { path: path.clone(), ok: false, error: Some(format!("保護されているため移動しません: {why}")) };
             }
