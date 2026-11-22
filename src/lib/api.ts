@@ -81,6 +81,8 @@ export const api = {
   moveToTrash: (paths: string[]) => invoke<TrashOutcome[]>("move_to_trash", { paths }),
   revealInFinder: (path: string) => invoke<void>("reveal_in_finder", { path }),
   openUsage: () => invoke<void>("open_usage"),
+  /** Opens an official Sign in with ChatGPT doc page (allow-listed on the Rust side) in the system browser. */
+  openSiwcDoc: (url: string) => invoke<void>("open_siwc_doc", { url }),
   siwcStatus: () => invoke<SiwcStatus>("siwc_status"),
   siwcSignIn: (clientId: string | null, promptConsent: boolean) => invoke<AccountView>("siwc_sign_in", { clientId, promptConsent }),
   siwcCancelSignIn: () => invoke<void>("siwc_cancel_sign_in"),

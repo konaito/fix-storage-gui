@@ -1,3 +1,4 @@
+mod docs;
 mod roots;
 mod safety;
 mod scan;
@@ -81,6 +82,27 @@ fn open_usage(app: tauri::AppHandle) -> Result<(), String> {
     app.opener().open_url(siwc::USAGE_URL, None::<&str>).map_err(|e| e.to_string())
 }
 
+/// Opens an official Sign in with ChatGPT documentation page in the system browser.
+#[tauri::command]
+fn open_siwc_doc(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    if !docs::is_official_siwc_doc(&url) {
+        return Err("公式ドキュメント以外の URL は開けません".into());
+    }
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Tells the login gate that the signed-in account may have changed.
+fn notify_siwc_changed(app: &tauri::AppHandle, reason: &'static str, remote_revoked: Option<bool>) {
+    let _ = app.emit("siwc-changed", SiwcChanged { reason, remote_revoked });
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SiwcChanged {
+    reason: &'static str,
+    remote_revoked: Option<bool>,
+}
+
 #[tauri::command]
 fn siwc_status(state: State<'_, AppState>) -> Result<siwc::Status, SiwcError> {
     state.siwc.status()
@@ -89,10 +111,14 @@ fn siwc_status(state: State<'_, AppState>) -> Result<siwc::Status, SiwcError> {
 #[tauri::command]
 async fn siwc_sign_in(app: tauri::AppHandle, state: State<'_, AppState>, client_id: Option<String>, prompt_consent: bool) -> Result<siwc::AccountView, SiwcError> {
     let opener = app.clone();
-    state
+    let res = state
         .siwc
         .sign_in(client_id, prompt_consent, move |url| opener.opener().open_url(url, None::<&str>).map_err(|e| e.to_string()))
-        .await
+        .await;
+    if res.is_ok() {
+        notify_siwc_changed(&app, "signed_in", None);
+    }
+    res
 }
 
 #[tauri::command]
@@ -101,8 +127,10 @@ fn siwc_cancel_sign_in(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-fn siwc_switch(state: State<'_, AppState>, client_id: String) -> Result<(), SiwcError> {
-    state.siwc.switch_account(&client_id)
+fn siwc_switch(app: tauri::AppHandle, state: State<'_, AppState>, client_id: String) -> Result<(), SiwcError> {
+    state.siwc.switch_account(&client_id)?;
+    notify_siwc_changed(&app, "switched", None);
+    Ok(())
 }
 
 #[tauri::command]
@@ -111,8 +139,10 @@ fn siwc_ack_welcome(state: State<'_, AppState>) -> Result<(), SiwcError> {
 }
 
 #[tauri::command]
-async fn siwc_sign_out(state: State<'_, AppState>) -> Result<siwc::SignOutResult, SiwcError> {
-    state.siwc.sign_out().await
+async fn siwc_sign_out(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<siwc::SignOutResult, SiwcError> {
+    let res = state.siwc.sign_out().await?;
+    notify_siwc_changed(&app, "signed_out", Some(res.remote_revoked));
+    Ok(res)
 }
 
 #[tauri::command]
@@ -152,6 +182,7 @@ pub fn run() {
             move_to_trash,
             reveal_in_finder,
             open_usage,
+            open_siwc_doc,
             siwc_status,
             siwc_sign_in,
             siwc_cancel_sign_in,
