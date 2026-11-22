@@ -31,6 +31,10 @@ export interface AiOutcome {
 interface Props {
   /** The user uses AI judgement: this step comes before the list and is not optional (#12). */
   aiFirst: boolean;
+  /** With aiFirst: items the AI has not judged show the rules' verdict in the list, not "未判定" (#26). */
+  ruleOnly: boolean;
+  /** "AI なしで一覧へ": open the list with the rules' verdict for whatever the AI has not judged (#26). */
+  onSkipAi: () => void;
   /** Whether the list step can be opened (with aiFirst, only after an AI run). */
   canGoReview: boolean;
   /** "戻る" (to the target step when aiFirst). */
@@ -57,6 +61,13 @@ interface Props {
 export function AiStep(p: Props) {
   if (p.running) return <AiRunning run={p.running} eyebrow={eyebrowOf(p.aiFirst)} destination={p.destination} onStop={p.onStop} />;
   const batches = Math.ceil(p.targets / p.batchSize);
+  // With aiFirst there is always a way to the list without (more) AI: no models, an error, a stop, or simply not wanting it (#26).
+  const skip =
+    p.aiFirst && !p.ruleOnly && p.targets > 0 ? (
+      <button type="button" onClick={p.onSkipAi} title="AI が判定していない項目を、元 CLI のルールで判定して一覧を開きます（この一覧だけ）">
+        {p.outcome && p.outcome.judged > 0 ? "残りはルール判定で一覧へ" : "AI なしで一覧へ"}
+      </button>
+    ) : null;
 
   return (
     <section className="step-page">
@@ -79,8 +90,9 @@ export function AiStep(p: Props) {
             >
               もう一度判定する（未判定 {p.targets} 件）…
             </button>
+            {skip}
             <button type="button" className="primary large" onClick={p.onGoReview} disabled={!p.canGoReview}>
-              結果を一覧で確認する →
+              {p.ruleOnly && p.outcome.judged === 0 ? "AI なしで一覧へ →" : "結果を一覧で確認する →"}
             </button>
           </>
         ) : p.planReady && !!p.modelName && p.targets > 0 ? (
@@ -94,6 +106,7 @@ export function AiStep(p: Props) {
                 ← 一覧に戻る
               </button>
             )}
+            {skip}
             <button type="button" className="primary large" onClick={p.onOpenSend}>
               送信内容を確認する…
             </button>
@@ -103,10 +116,16 @@ export function AiStep(p: Props) {
             <button type="button" onClick={p.onBack}>
               ← 対象を変える
             </button>
-            {p.canGoReview && (
+            {p.ruleOnly ? (
+              <button type="button" className="primary large" onClick={p.onGoReview} disabled={!p.canGoReview}>
+                AI なしで一覧へ →
+              </button>
+            ) : p.canGoReview ? (
               <button type="button" className="primary large" onClick={p.onGoReview}>
                 一覧へ →
               </button>
+            ) : (
+              skip
             )}
           </>
         ) : (
@@ -122,7 +141,7 @@ export function AiStep(p: Props) {
       </StepBar>
       {!p.outcome && p.planReady && (
         <p className="muted small lead">
-          {p.aiFirst && "一覧は AI の判定が終わってから開きます。"}
+          {p.aiFirst && !p.ruleOnly && "一覧は AI の判定が終わってから開きます。「AI なしで一覧へ」なら、この一覧だけ元 CLI のルールで判定します。"}
           送る前に、実際に送る内容（JSON）をすべて確認できます。AI の判定は参考で、保護リストと元 CLI のルールが常に優先されます。
         </p>
       )}
@@ -133,8 +152,12 @@ export function AiStep(p: Props) {
             <>
               <p>{p.outcome.error}</p>
               {p.outcome.judged > 0 && <p className="muted small">{p.outcome.judged} 件は判定済みで、一覧に反映しています。</p>}
-              {p.outcome.failed > 0 && <FailedNote count={p.outcome.failed} reason={p.outcome.failedReason} />}
-              {p.aiFirst && <p className="muted small">AI が判定していない項目は「未判定」になり、選べません。</p>}
+              {p.outcome.failed > 0 && <FailedNote count={p.outcome.failed} reason={p.outcome.failedReason} ruleOnly={p.ruleOnly} />}
+              {p.aiFirst && (
+                <p className="muted small">
+                  {p.ruleOnly ? "AI が判定していない項目は、元 CLI のルールで判定して一覧に出します。" : "AI が判定していない項目は「未判定」になり、選べません。"}
+                </p>
+              )}
             </>
           ) : (
             <>
@@ -142,11 +165,11 @@ export function AiStep(p: Props) {
               {p.outcome.missing > 0 && (
                 <p className="muted small">
                   {p.outcome.missing} 件は AI の応答に含まれていなかったため、
-                  {p.aiFirst ? "「未判定」のままで、選べません。" : "元 CLI の判定のままです。"}
+                  {p.aiFirst && !p.ruleOnly ? "「未判定」のままで、選べません。" : "元 CLI の判定のままです。"}
                 </p>
               )}
-              {p.outcome.failed > 0 && <FailedNote count={p.outcome.failed} reason={p.outcome.failedReason} />}
-              {p.outcome.stopped && p.aiFirst && <p className="muted small">中止までに判定できなかった項目は「未判定」のままで、選べません。</p>}
+              {p.outcome.failed > 0 && <FailedNote count={p.outcome.failed} reason={p.outcome.failedReason} ruleOnly={p.ruleOnly} />}
+              {p.outcome.stopped && p.aiFirst && !p.ruleOnly && <p className="muted small">中止までに判定できなかった項目は「未判定」のままで、選べません。</p>}
             </>
           )}
           {p.summary.all.count > 0 && (
@@ -181,7 +204,10 @@ export function AiStep(p: Props) {
           <span className="spinner tiny-spin" /> モデル一覧を取得しています…
         </div>
       ) : !p.modelName ? (
-        <div className="callout warn-box">モデル一覧を取得できていません。右のパネルの「再読み込み」を試してください。</div>
+        <div className="callout warn-box">
+          モデル一覧を取得できていません。右のパネルの「再読み込み」を試してください。
+          {p.aiFirst && p.targets > 0 && "「AI なしで一覧へ」なら、元 CLI のルールで判定した一覧を開けます。"}
+        </div>
       ) : p.targets === 0 ? (
         <div className="callout">未判定の項目はありません。</div>
       ) : (
@@ -197,10 +223,11 @@ export function AiStep(p: Props) {
   );
 }
 
-function FailedNote({ count, reason }: { count: number; reason: string | null }) {
+function FailedNote({ count, reason, ruleOnly }: { count: number; reason: string | null; ruleOnly: boolean }) {
   return (
     <p className="muted small">
-      {count} 件は 2 回送っても応答を読めなかったため、「未判定」のままです。「もう一度判定する」で未判定の分だけを送り直せます。
+      {count} 件は 2 回送っても応答を読めなかったため、AI の判定がありません
+      {ruleOnly ? "（一覧では元 CLI のルールで判定します）" : "（「未判定」のままです）"}。「もう一度判定する」で未判定の分だけを送り直せます。
       {reason && `（${reason}）`}
     </p>
   );

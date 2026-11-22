@@ -48,6 +48,13 @@ export interface FlowState {
   aiFirst: boolean;
   /** With aiFirst: an AI run has ended for the current list (even a failed one), or there was nothing to send. */
   aiSettled: boolean;
+  /**
+   * With aiFirst: the current list shows the rules' verdict for items the AI has not judged, instead of "未判定" (#26).
+   * Set when the AI is unavailable (no models, a run ended in an error) or the user skips it for this list. A new scan clears it.
+   */
+  ruleOnly: boolean;
+  /** The model list could not be loaded (failed or empty), so no AI run can start. */
+  noModels: boolean;
 }
 
 export const initialFlow: FlowState = {
@@ -58,6 +65,8 @@ export const initialFlow: FlowState = {
   trashFrom: "review",
   aiFirst: false,
   aiSettled: false,
+  ruleOnly: false,
+  noModels: false,
 };
 
 export type FlowEvent =
@@ -69,7 +78,12 @@ export type FlowEvent =
   | { type: "go"; to: StepId; selected: number }
   | { type: "back"; selected: number }
   | { type: "aiStart" }
-  | { type: "aiEnd"; ok: boolean }
+  /** `error`: the run ended in an error (usage limit, sign-in, every batch failed), not a stop by the user. */
+  | { type: "aiEnd"; ok: boolean; error?: boolean }
+  /** Whether a model list is available (false: loading it failed or it came back empty). */
+  | { type: "models"; available: boolean }
+  /** "AI なしで一覧へ": open this list with the rules' verdict, without (more) AI judgement. */
+  | { type: "skipAi" }
   | { type: "trashStart" }
   | { type: "trashEnd" }
   | { type: "reset" };
@@ -123,8 +137,10 @@ export function flowReducer(s: FlowState, e: FlowEvent): FlowState {
       if (s.busy !== "scan") return s;
       // A failed scan goes back to the previous list if there is one, otherwise to the target step (the error is shown there).
       if (e.ok) {
-        const aiSettled = !s.aiFirst || (e.aiTargets ?? 0) === 0;
-        return { ...s, step: aiSettled ? "review" : "ai", busy: null, hasScan: true, aiDone: false, aiSettled };
+        const needsAi = s.aiFirst && (e.aiTargets ?? 0) > 0;
+        // Without models the AI step still opens (it says why), but the list is not locked behind it (#26).
+        const ruleOnly = needsAi && s.noModels;
+        return { ...s, step: needsAi ? "ai" : "review", busy: null, hasScan: true, aiDone: false, aiSettled: !needsAi || ruleOnly, ruleOnly };
       }
       return { ...s, step: s.hasScan ? (canGo({ ...s, busy: null }, "review", 0) ? "review" : "ai") : "target", busy: null };
     }
@@ -151,7 +167,16 @@ export function flowReducer(s: FlowState, e: FlowEvent): FlowState {
       return { ...s, step: "ai", busy: "ai" };
     case "aiEnd":
       if (s.busy !== "ai") return s;
-      return { ...s, busy: null, aiDone: s.aiDone || e.ok, aiSettled: true };
+      return { ...s, busy: null, aiDone: s.aiDone || e.ok, aiSettled: true, ruleOnly: s.ruleOnly || !!e.error };
+    case "models": {
+      const noModels = !e.available;
+      if (noModels === s.noModels) return s;
+      if (noModels && s.aiFirst && s.hasScan && !s.aiSettled && !s.busy) return { ...s, noModels, aiSettled: true, ruleOnly: true };
+      return { ...s, noModels };
+    }
+    case "skipAi":
+      if (s.busy || !s.hasScan) return s;
+      return { ...s, step: "review", aiSettled: true, ruleOnly: true };
     case "trashStart":
       if (s.busy || s.step !== "trash") return s;
       return { ...s, busy: "trash" };
@@ -159,7 +184,7 @@ export function flowReducer(s: FlowState, e: FlowEvent): FlowState {
       if (s.busy !== "trash") return s;
       return { ...s, step: "done", busy: null };
     case "reset":
-      return s.busy ? s : { ...initialFlow, aiFirst: s.aiFirst };
+      return s.busy ? s : { ...initialFlow, aiFirst: s.aiFirst, noModels: s.noModels };
   }
 }
 

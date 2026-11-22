@@ -171,6 +171,49 @@ describe("signed-in users: AI judgement comes before the list (#12)", () => {
     expect(s.step).toBe("ai");
     expect(canGo(s, "review", 0)).toBe(false);
   });
+  describe("no dead end without the AI (#26)", () => {
+    it("the model list failing after the scan opens the list with rule judgement", () => {
+      const s = run([{ type: "models", available: false }], scannedAi);
+      expect(s.step).toBe("ai");
+      expect(s.ruleOnly).toBe(true);
+      expect(canGo(s, "review", 0)).toBe(true);
+      expect(canGo(s, "trash", 2)).toBe(true);
+      expect(run([{ type: "go", to: "review", selected: 0 }], s).step).toBe("review");
+    });
+    it("the model list failing before the scan does too", () => {
+      const s = run([{ type: "models", available: false }, { type: "scanStart" }, { type: "scanEnd", ok: true, aiTargets: 40 }], ai);
+      expect(s).toMatchObject({ step: "ai", ruleOnly: true });
+      expect(canGo(s, "review", 0)).toBe(true);
+    });
+    it("models coming back do not close the list again, and the next scan asks the AI again", () => {
+      const s = run([{ type: "models", available: false }, { type: "models", available: true }], scannedAi);
+      expect(canGo(s, "review", 0)).toBe(true);
+      const again = run([{ type: "scanStart" }, { type: "scanEnd", ok: true, aiTargets: 3 }], s);
+      expect(again).toMatchObject({ step: "ai", ruleOnly: false });
+      expect(canGo(again, "review", 0)).toBe(false);
+    });
+    it("an AI run that ends in an error falls back to rule judgement", () => {
+      const s = run([{ type: "aiStart" }, { type: "aiEnd", ok: false, error: true }], scannedAi);
+      expect(s).toMatchObject({ aiSettled: true, ruleOnly: true });
+      const stopped = run([{ type: "aiStart" }, { type: "aiEnd", ok: false }], scannedAi);
+      expect(stopped.ruleOnly).toBe(false);
+    });
+    it("a plan user can skip the AI for this list only", () => {
+      const s = run([{ type: "skipAi" }], scannedAi);
+      expect(s).toMatchObject({ step: "review", ruleOnly: true, aiSettled: true, aiDone: false });
+      const again = run([{ type: "scanStart" }, { type: "scanEnd", ok: true, aiTargets: 3 }], s);
+      expect(again).toMatchObject({ step: "ai", ruleOnly: false });
+    });
+    it("a failed rescan keeps the rule judgement of the list it returns to", () => {
+      const s = run([{ type: "skipAi" }, { type: "scanStart" }, { type: "scanEnd", ok: false }], scannedAi);
+      expect(s).toMatchObject({ step: "review", ruleOnly: true });
+    });
+    it("skipping does nothing while busy or without a list", () => {
+      expect(run([{ type: "skipAi" }], ai).ruleOnly).toBe(false);
+      const busy = run([{ type: "aiStart" }, { type: "skipAi" }], scannedAi);
+      expect(busy).toMatchObject({ busy: "ai", ruleOnly: false });
+    });
+  });
   it("rule-only users keep the old order", () => {
     expect(scanned.step).toBe("review");
     expect(backTarget(run([{ type: "go", to: "ai", selected: 0 }], scanned))).toBe("review");

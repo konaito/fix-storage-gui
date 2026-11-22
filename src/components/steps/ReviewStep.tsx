@@ -23,6 +23,8 @@ interface Props {
   aiDone: boolean;
   /** The user uses AI judgement, so the list comes after the AI step (#12). */
   aiFirst: boolean;
+  /** With aiFirst: items the AI has not judged show the rules' verdict, not "未判定" (#26). */
+  ruleOnly: boolean;
   selected: Set<string>;
   onToggle: (path: string) => void;
   onSelectPaths: (paths: string[]) => void;
@@ -70,8 +72,12 @@ export function ReviewStep(p: Props) {
           p.aiDone
             ? sum.pending.count > 0
               ? `AI の判定を反映しました。AI が判定していない ${sum.pending.count} 件は「未判定」で、選べません。`
-              : "AI の判定を反映しました。「削除していい」から順に表示しています。"
-            : p.aiFirst
+              : p.aiFirst && p.ruleOnly
+                ? "AI の判定を反映しました。AI が判定していない項目は元 CLI のルールで判定しています。"
+                : "AI の判定を反映しました。「削除していい」から順に表示しています。"
+            : p.aiFirst && p.ruleOnly
+              ? "AI を使わず、元 CLI のルールで判定しています。項目をクリックすると右に詳細が出ます。"
+              : p.aiFirst
               ? sum.pending.count > 0
                 ? "AI 判定ができなかったため「未判定」のままで、選べません。「AI で判定する」からやり直してください。"
                 : "AI に送る項目はありませんでした。項目をクリックすると右に詳細が出ます。"

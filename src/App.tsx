@@ -37,6 +37,8 @@ export default function App() {
   const [status, setStatus] = useState<SiwcStatus | null>(null);
   const [models, setModels] = useState<Model[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  // Loading the model list failed or it came back empty: no AI run can start, so the list must not wait for one (#26).
+  const [modelsFailed, setModelsFailed] = useState(false);
   const [model, setModel] = useState("");
   const [signingIn, setSigningIn] = useState(false);
 
@@ -99,8 +101,10 @@ export default function App() {
     if (gate.statusVersion > 0) void refreshStatus();
   }, [gate.statusVersion, refreshStatus]);
 
-  // What every step shows and acts on: with plan usage, rows the AI has not judged are "未判定" and can't be selected (#12).
-  const view = useMemo(() => rows.map((r) => forDisplay(r, planReady)), [rows, planReady]);
+  // What every step shows and acts on: with plan usage, rows the AI has not judged are "未判定" and can't be selected (#12),
+  // unless this list fell back to the rules' verdict (no models, the AI ended in an error, or the user skipped it: #26).
+  const requireAi = planReady && !flow.ruleOnly;
+  const view = useMemo(() => rows.map((r) => forDisplay(r, requireAi)), [rows, requireAi]);
   // AI review targets: everything not locked by the hard block list or fix-storage's rules.
   const aiTargets = useMemo(() => view.filter((r) => !r.final.locked), [view]);
   // What a run sends: only targets the AI has not judged yet, so "もう一度判定する" does not resend judged rows (#27).
@@ -117,9 +121,11 @@ export default function App() {
     try {
       const list = await api.siwcModels();
       setModels(list);
+      setModelsFailed(list.length === 0);
       setModel((cur) => (list.some((m) => m.slug === cur) ? cur : (list[0]?.slug ?? "")));
     } catch (e) {
       setModels([]);
+      setModelsFailed(true);
       handleAiError(e);
     } finally {
       setModelsLoading(false);
@@ -141,8 +147,13 @@ export default function App() {
   // Refresh the model list whenever the active account changes.
   useEffect(() => {
     if (planReady) void loadModels();
-    else setModels([]);
+    else {
+      setModels([]);
+      setModelsFailed(false);
+    }
   }, [planReady, status?.active, loadModels]);
+
+  useEffect(() => dispatch({ type: "models", available: !modelsFailed }), [modelsFailed]);
 
   function handleAiError(e: unknown) {
     if (isSiwcError(e)) {
@@ -306,17 +317,24 @@ export default function App() {
       if (aiAbort.current === abort) aiAbort.current = null;
       setAiRun(null);
       setAiOutcome({ judged: results.size, missing, failed, failedReason, stopped, error: err });
-      dispatch({ type: "aiEnd", ok: !err && results.size > 0 });
+      // An error (usage limit, sign-in, every batch failed) opens the list with the rules' verdict for the rest (#26).
+      dispatch({ type: "aiEnd", ok: !err && results.size > 0, error: !!err || (!stopped && results.size === 0 && failed > 0) });
     }
   }
 
   // Open the send dialog by itself once the AI step is up and a model is ready.
   useEffect(() => {
-    if (autoAi && flow.step === "ai" && !flow.busy && planReady && !!model && !!env && aiTargets.length > 0) {
+    if (autoAi && flow.step === "ai" && !flow.busy && !flow.ruleOnly && planReady && !!model && !!env && aiTargets.length > 0) {
       setAutoAi(false);
       setAiDialog(true);
     }
-  }, [autoAi, flow.step, flow.busy, planReady, model, env, aiTargets.length]);
+  }, [autoAi, flow.step, flow.busy, flow.ruleOnly, planReady, model, env, aiTargets.length]);
+
+  /** "AI なしで一覧へ": this list only shows the rules' verdict for items the AI has not judged (#26). */
+  function skipAi() {
+    setAutoAi(false);
+    dispatch({ type: "skipAi" });
+  }
 
   // Drop selections that new verdicts (or a rescan) no longer allow.
   useEffect(() => {
@@ -416,6 +434,7 @@ export default function App() {
           partial={partial}
           aiDone={flow.aiDone}
           aiFirst={flow.aiFirst}
+          ruleOnly={flow.ruleOnly}
           selected={selected}
           onToggle={toggle}
           onSelectPaths={selectPaths}
@@ -444,6 +463,8 @@ export default function App() {
       page = (
         <AiStep
           aiFirst={flow.aiFirst}
+          ruleOnly={flow.ruleOnly}
+          onSkipAi={skipAi}
           canGoReview={canGo(flow, "review", chosen.length)}
           onBack={() => dispatch({ type: "back", selected: chosen.length })}
           planReady={planReady}
