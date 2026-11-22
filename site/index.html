@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fix Storage GUI — 重いファイルを、安全にゴミ箱へ</title>
+    <meta
+      name="description"
+      content="Mac のストレージを圧迫している重いファイル・フォルダを見つけ、完全削除せずゴミ箱へ移す macOS 専用アプリ。Sign in with ChatGPT のデモアプリです。AI に送るのはメタデータだけです。"
+    />
+    <link rel="canonical" href="https://konaito.github.io/fix-storage-gui/" />
+    <link rel="icon" href="/fix-storage-gui/app-icon.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/fix-storage-gui/app-icon.png" />
+    <meta property="og:title" content="Fix Storage GUI" />
+    <meta
+      property="og:description"
+      content="重いファイルを見つけて、安全にゴミ箱へ。macOS 専用。Sign in with ChatGPT のデモアプリです。"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://konaito.github.io/fix-storage-gui/" />
+    <meta property="og:image" content="https://konaito.github.io/fix-storage-gui/app-icon.png" />
+    <meta property="og:locale" content="ja_JP" />
+    <meta name="twitter:card" content="summary" />
+    <link rel="stylesheet" href="/fix-storage-gui/styles.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">本文へスキップ</a>
+
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="brand" href="#top">
+          <img src="/fix-storage-gui/app-icon.png" width="36" height="36" alt="" />
+          <span>Fix Storage GUI</span>
+        </a>
+        <nav class="nav" aria-label="ページ内">
+          <a href="#how">できること</a>
+          <a href="#safety">安全性</a>
+          <a href="#privacy">プライバシー</a>
+          <a href="#siwc">Sign in with ChatGPT</a>
+        </nav>
+        <a class="btn btn-sm" href="https://github.com/konaito/fix-storage-gui/releases/latest">ダウンロード</a>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="wrap hero-inner">
+          <p class="kicker">Sign in with ChatGPT のデモアプリ</p>
+          <img
+            class="hero-icon"
+            src="/fix-storage-gui/app-icon.png"
+            width="128"
+            height="128"
+            alt="Fix Storage GUI のアプリアイコン"
+          />
+          <h1>重いファイルを見つけて、<br />安全にゴミ箱へ。</h1>
+          <p class="lead">
+            Fix Storage GUI は、Mac のストレージを圧迫している重いファイル・フォルダを見つけ、
+            最終確認のあと<strong>ゴミ箱へ移動</strong>するための GUI アプリです（Tauri v2）。
+            <strong>完全削除はしません。</strong>
+            Finder の「戻す」で元に戻せます。
+            AI 判定には <a href="#siwc">Sign in with ChatGPT</a> を使い、ChatGPT プランの使用量で動きます（API キー不要）。
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-lg" href="https://github.com/konaito/fix-storage-gui/releases/latest">
+              最新版をダウンロード
+            </a>
+            <a class="btn btn-lg btn-ghost" href="https://github.com/konaito/fix-storage-gui">ソースコードを見る</a>
+          </div>
+          <ul class="badges">
+            <li>macOS 専用</li>
+            <li>Apple Silicon / Intel（universal）</li>
+            <li>Developer ID 署名 + 公証済み（v0.1.1）</li>
+          </ul>
+          <p class="hero-note">
+            Windows・Linux には対応していません。
+            最新の GitHub Release（現在の v0.1.1）の <code>.dmg</code> は Developer ID で署名され、Apple の公証（notarization）を通しています。
+            開いて <code>Fix Storage GUI.app</code> を「アプリケーション」へドラッグしてください。
+          </p>
+          <div class="storage-bar" aria-hidden="true">
+            <span class="seg seg-b"></span>
+            <span class="seg seg-g"></span>
+            <span class="seg seg-p"></span>
+            <span class="seg seg-o"></span>
+            <span class="seg seg-s"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="how">
+        <div class="wrap">
+          <p class="eyebrow">Workflow</p>
+          <h2>4つのステップ</h2>
+          <ol class="steps">
+            <li>
+              <h3>スキャン対象を選ぶ</h3>
+              <p>「Mac 全体（元 CLI と同じフォルダ群）」か、任意のフォルダを選びます。</p>
+            </li>
+            <li>
+              <h3>重いもの一覧</h3>
+              <p>
+                サイズ順に、最終使用日（Spotlight の <code>kMDItemLastUsedDate</code>）、更新日、
+                元 CLI のカテゴリと判定を表示します。フォルダは「中を見る」で掘り下げられます。
+              </p>
+            </li>
+            <li>
+              <h3>AI 判定</h3>
+              <p>「削除していい / 注意 / 消しちゃダメ」と理由を日本語で表示します。判定には Sign in with ChatGPT を使います。</p>
+            </li>
+            <li>
+              <h3>ゴミ箱へ移動</h3>
+              <p>選んだものを最終確認ダイアログのあとでゴミ箱へ移動します。完全削除はしません。</p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section section-safety" id="safety">
+        <div class="wrap">
+          <p class="eyebrow">Safety first</p>
+          <h2>安全のための仕組み</h2>
+          <p class="intro">
+            このアプリの目的は「一気に消す」ことではなく、<strong>消しすぎない</strong>ことです。
+            危険な対象は選べません。移動先はゴミ箱だけです。
+          </p>
+
+          <blockquote class="pull">
+            完全削除はしません。ゴミ箱へ移すだけです。Finder の「戻す」で復元できます。
+          </blockquote>
+
+          <div class="priority" role="group" aria-label="判定の優先順位">
+            <p class="priority-label">判定の優先順位</p>
+            <ol class="priority-row">
+              <li><strong>ハードブロック</strong></li>
+              <li aria-hidden="true" class="gt">＞</li>
+              <li><strong>元 CLI のルール</strong></li>
+              <li aria-hidden="true" class="gt">＞</li>
+              <li><strong>AI</strong></li>
+            </ol>
+            <p class="priority-note">
+              ハードブロックは、元 CLI のルールや AI の判定より常に優先されます。
+              AI が「削除していい」と言っても、ブロック対象は選択できません。
+            </p>
+          </div>
+
+          <ul class="cards">
+            <li>
+              <h3>ゴミ箱だけ</h3>
+              <p>
+                選んだ対象は、最終確認ダイアログのあとでゴミ箱へ移動します。
+                完全削除は行いません。Finder から元に戻せます。
+              </p>
+            </li>
+            <li>
+              <h3>ハードブロックが最優先</h3>
+              <p>
+                システム領域、認証情報、鍵や秘密情報らしいファイル、Git リポジトリ、
+                ホームと <code>/Applications</code> の外側などは選べません。
+                元 CLI の保護フォルダや「システム/ツール管理」判定も守ります。
+              </p>
+            </li>
+            <li>
+              <h3>移動直前に Rust が再確認</h3>
+              <p>
+                ゴミ箱へ移す直前に、Rust 側でもう一度ハードブロックを確認します。
+                安全に関わる最終チェックは、ネイティブ側に置いてあります。
+              </p>
+            </li>
+            <li>
+              <h3>AI より慎重なルール</h3>
+              <p>
+                AI が「消しちゃダメ」と判定したものは選択できません。
+                写真・ムービー・ミュージックなど個人データのカテゴリや「使用中のデータ」は、
+                AI が「削除していい」と言っても「注意」に下げます。
+              </p>
+            </li>
+          </ul>
+
+          <div class="details">
+            <h3>ハードブロックと保護の対象（例）</h3>
+            <div class="details-grid">
+              <div>
+                <h4>元 CLI の保護</h4>
+                <p>
+                  <code>/</code>、ホーム、<code>~/Library</code>、<code>~/Library/Keychains</code>、
+                  <code>Preferences</code>、<code>Mail</code>、<code>Messages</code> など。
+                  元 CLI が「システム/ツール管理」と判定したもの（Homebrew、Docker など）も含まれます。
+                </p>
+              </div>
+              <div>
+                <h4>このアプリで追加したハードブロック</h4>
+                <p>
+                  <code>/System</code>・<code>/private</code>・<code>/usr</code> などのシステム領域、キーチェーン、
+                  <code>~/.ssh</code>・<code>~/.gnupg</code>・<code>~/.aws</code>・<code>~/.kube</code>・<code>~/.config/gh</code>
+                  などの認証情報、<code>id_rsa*</code>・<code>*.pem</code>・<code>*.key</code>・<code>*.p12</code>・<code>.env</code>
+                  などの鍵や秘密情報らしいファイル、<code>.git</code> とその中身、<code>.git</code> を含むリポジトリのフォルダ、
+                  ホームフォルダと <code>/Applications</code> の外側。
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="privacy">
+        <div class="wrap">
+          <p class="eyebrow">Privacy</p>
+          <h2>AI に送るのはメタデータだけ</h2>
+          <p class="intro">
+            スキャン・サイズ計測・日付取得・ゴミ箱移動は、すべてこの Mac の中だけで行います。
+            <strong>ファイルの中身は送りません。</strong>
+          </p>
+          <ul class="cards cards-3">
+            <li>
+              <h3>送るのはメタデータのみ</h3>
+              <p>
+                パス、名前、拡張子、ファイル/フォルダの別、サイズ、最終使用日、更新日、
+                元 CLI のカテゴリ・判定・理由です。中身の読み取りやアップロードはありません。
+              </p>
+            </li>
+            <li>
+              <h3>送る前に JSON を確認</h3>
+              <p>
+                「この情報を OpenAI に送ります」というダイアログで、実際に送る JSON をそのまま確認できます。
+                見てから送るかどうかを決められます。
+              </p>
+            </li>
+            <li>
+              <h3>パスとユーザー名は初期状態で隠す</h3>
+              <p>
+                ホームフォルダ（<code>/Users/あなた</code> → <code>~</code>）とユーザー名（→ <code>&lt;user&gt;</code>）を隠すオプションがあり、
+                <strong>初期状態でオン</strong>です。
+              </p>
+            </li>
+          </ul>
+          <figure class="json-preview">
+            <figcaption>実際に送る JSON の形（メタデータのみ。<code>id</code> は項目の識別子で、ファイルの中身は含まれません）</figcaption>
+            <pre><code>{
+  "items": [
+    {
+      "id": "…",
+      "path": "~/…",
+      "name": "…",
+      "ext": "…",
+      "kind": "file | folder",
+      "size_bytes": 0,
+      "last_used": "YYYY-MM-DD | null",
+      "modified": "YYYY-MM-DD | null",
+      "category": "…",
+      "rule_verdict": "…",
+      "rule_reason": "…"
+    }
+  ]
+}</code></pre>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section section-siwc" id="siwc">
+        <div class="wrap">
+          <p class="eyebrow">Sign in with ChatGPT</p>
+          <h2>Sign in with ChatGPT のデモアプリです</h2>
+          <p class="intro">
+            AI 判定には、OpenAI の Sign in with ChatGPT のうち
+            「ChatGPT プランの使用量を使う」機能を使っています。
+            API キーは不要です。このアプリはオープンソースで、お使いの Mac 上でローカルに動作します。
+            ChatGPT の会話履歴やメモリにはアクセスしません。
+          </p>
+          <ul class="facts">
+            <li>
+              <strong>対象アプリ（公式ドキュメントの条件）</strong>
+              オープンソースのアプリと、ローカルで動く個人プロジェクト（ほかに一部の非公開アプリ）。
+              このアプリはその条件に沿っています。
+            </li>
+            <li>
+              <strong>対象ユーザー</strong>
+              公式 Cookbook では「対象となる ChatGPT Plus と Pro のユーザー」と説明されています。
+              利用するかどうかは、ブラウザの同意画面で選べます。許可しなかった場合、AI 判定は使えません（元 CLI のルール判定は使えます）。
+            </li>
+            <li>
+              <strong>使用量</strong>
+              ChatGPT の設定 → 使用量で確認でき、アプリごとの上限も設定できます。
+              ドキュメントによると、Plus の 5 時間ごとの使用上限はこのアプリを含むすべてのアプリで共有され、
+              アプリごとに別枠はありません（Pro には 5 時間上限は適用されません）。
+            </li>
+            <li>
+              <strong>プレビュー</strong>
+              現在はプレビューで、<code>store: false</code> と <code>stream: true</code> が必須、
+              画像生成やファイル検索などのツールは使えない、といった制限があります。仕様は変わる可能性があります。
+            </li>
+            <li>
+              <strong>独自実装（公式 DevKit は未使用）</strong>
+              公式 DevKit は非商用ライセンスのため、このリポジトリの MIT ライセンスと条件が合いません。
+              コードやブランド素材は使っていません。ドキュメントを読んで独自に実装しています。
+              ボタンはロゴなしのテキスト（「Continue with ChatGPT」）です。
+              トークンは macOS のキーチェーンに保存し、Web ビュー側には渡しません。
+            </li>
+          </ul>
+
+          <h3 class="docs-heading">公式ドキュメント</h3>
+          <p class="docs-lead">
+            詳細は OpenAI の公式ドキュメント（developers.openai.com/siwc）を参照してください。
+          </p>
+          <ul class="docs">
+            <li>
+              <a href="https://developers.openai.com/siwc">Sign in with ChatGPT（概要）</a>
+            </li>
+            <li>
+              <a href="https://developers.openai.com/siwc/quickstart">Quickstart</a>
+            </li>
+            <li>
+              <a href="https://developers.openai.com/siwc/token-sharing-open-source">オープンソースアプリ向け概要（ChatGPT プランの使用）</a>
+            </li>
+            <li>
+              <a href="https://developers.openai.com/siwc/token-sharing-open-source/sign-in">Registration and sign-in</a>
+            </li>
+            <li>
+              <a href="https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference">Models and inference</a>
+            </li>
+            <li>
+              <a href="https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations">Preview limitations</a>
+            </li>
+            <li>
+              <a href="https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery">Errors and recovery</a>
+            </li>
+            <li>
+              <a href="https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions">Accounts and sessions</a>
+            </li>
+            <li>
+              <a href="https://developers.openai.com/cookbook/articles/sign-in-with-chatgpt">Cookbook: Integrating Sign in with ChatGPT in your open-source app</a>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section section-download" id="download">
+        <div class="wrap download-inner">
+          <h2>macOS 向けにダウンロード</h2>
+          <p>
+            最新の GitHub Release から universal の <code>.dmg</code> を入手できます。
+            現在の最新版は v0.1.1 で、Developer ID 署名と Apple の公証を通しています。
+          </p>
+          <a class="btn btn-lg" href="https://github.com/konaito/fix-storage-gui/releases/latest">
+            GitHub Releases から入手
+          </a>
+          <p class="hero-note">
+            Apple Silicon と Intel の両方に対応した universal ビルドです。Windows・Linux 版はありません。
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap footer-inner">
+        <p>
+          このアプリは
+          <a href="https://github.com/govijr/fix-storage">govijr/fix-storage</a>
+          （MIT License, Copyright (c) 2026 the fix-storage authors）をもとにしています。
+          元はターミナル用の CLI（TypeScript + Ink）で、コアロジックを GUI 向けに再利用・移植しています。
+          fix-storage 本家とは無関係の非公式プロジェクトです。
+        </p>
+        <p>
+          ソースコードとライセンスは
+          <a href="https://github.com/konaito/fix-storage-gui">github.com/konaito/fix-storage-gui</a>
+          （MIT）を参照してください。元の著作権表示も LICENSE に含めています。
+        </p>
+        <p>
+          ChatGPT と OpenAI は OpenAI の商標です。このアプリは OpenAI とは関係ありません。
+        </p>
+        <p class="footer-meta">
+          <a href="https://github.com/konaito/fix-storage-gui">GitHub</a>
+          ·
+          <a href="https://github.com/konaito/fix-storage-gui/releases/latest">Releases</a>
+          ·
+          <a href="https://github.com/konaito/fix-storage-gui/blob/main/LICENSE">LICENSE</a>
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
