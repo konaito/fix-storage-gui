@@ -29,6 +29,9 @@ pub struct ScanItem {
     pub last_used_ms: Option<f64>,
     /// Why this item can never be moved to the Trash (hard block), if so.
     pub blocked: Option<String>,
+    /// Holds a regular file with more than one hard link (#34). Its blocks may also belong to
+    /// paths outside this item, so moving it to the Trash can free less than `size`.
+    pub shared: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,6 +156,43 @@ fn du(path: &str, cancel: &AtomicBool) -> DuResult {
     DuResult { bytes: kb * 1024, denied: stalled || stderr_denied }
 }
 
+/// Most entries `has_hard_links` reads in one folder before it gives up (#34).
+const HARD_LINK_SCAN_CAP: usize = 20_000;
+
+/// A loose file whose blocks are shared with another path (more than one hard link).
+fn is_hard_linked(meta: &fs::Metadata) -> bool {
+    meta.is_file() && meta.nlink() > 1
+}
+
+/// Whether a folder holds a hard-linked file (#34). du counts such a file in full for every
+/// folder that links it, so moving one of them to the Trash can free less than its size.
+/// Walks like `du -x` (no symlinks, stays on the folder's volume) and stops at the first hit.
+/// After `cap` entries or on cancel it gives up and answers false.
+fn has_hard_links(path: &str, cap: usize, cancel: &AtomicBool) -> bool {
+    let Ok(top) = fs::symlink_metadata(path) else { return false };
+    let dev = top.dev();
+    let mut stack = vec![std::path::PathBuf::from(path)];
+    let mut seen = 0usize;
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            seen += 1;
+            if seen > cap || cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            // DirEntry::metadata does not follow symlinks.
+            let Ok(meta) = entry.metadata() else { continue };
+            if is_hard_linked(&meta) {
+                return true;
+            }
+            if meta.is_dir() && meta.dev() == dev {
+                stack.push(entry.path());
+            }
+        }
+    }
+    false
+}
+
 fn mtime_ms(meta: &fs::Metadata) -> Option<f64> {
     meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as f64)
 }
@@ -209,7 +249,8 @@ fn last_used(paths: &[String], on_progress: &dyn Fn(Progress)) -> Vec<Option<f64
 
 enum Unit {
     Dir(String),
-    File(String, u64),
+    /// Path, size, hard-linked.
+    File(String, u64, bool),
 }
 
 fn holds_root(path: &str, roots: &[Root]) -> bool {
@@ -247,7 +288,7 @@ fn collect_units(
                 } else if let Ok(meta) = fs::symlink_metadata(&dir) {
                     // Whole Mac: a root that does not exist on this Mac is normal and skipped.
                     if meta.is_file() {
-                        units.push(Unit::File(dir.clone(), meta.blocks() * 512));
+                        units.push(Unit::File(dir.clone(), meta.blocks() * 512, is_hard_linked(&meta)));
                     }
                 }
                 continue;
@@ -284,7 +325,7 @@ fn collect_units(
                     units.push(Unit::Dir(child));
                 }
             } else {
-                units.push(Unit::File(child, meta.blocks() * 512));
+                units.push(Unit::File(child, meta.blocks() * 512, is_hard_linked(&meta)));
             }
         }
     }
@@ -313,7 +354,8 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     };
 
     let total = units.len();
-    let measured: Arc<Mutex<Vec<(String, u64, bool)>>> = Arc::new(Mutex::new(Vec::with_capacity(total)));
+    // (path, size, dir, shared)
+    let measured: Arc<Mutex<Vec<(String, u64, bool, bool)>>> = Arc::new(Mutex::new(Vec::with_capacity(total)));
     let denied_m = Arc::new(Mutex::new(denied));
     let queue = Arc::new(Mutex::new(units.into_iter().collect::<VecDeque<_>>()));
     let done = Arc::new(AtomicUsize::new(0));
@@ -330,14 +372,16 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
             let next = queue.lock().unwrap().pop_front();
             let Some(unit) = next else { return };
             match unit {
-                Unit::File(path, bytes) => measured.lock().unwrap().push((path, bytes, false)),
+                Unit::File(path, bytes, shared) => measured.lock().unwrap().push((path, bytes, false, shared)),
                 Unit::Dir(path) => {
                     on_progress(Progress { phase: "measuring", current: path.clone(), done: done.load(Ordering::Relaxed), total });
                     let r = du(&path, &cancel);
                     if r.denied {
                         denied_m.lock().unwrap().push(path.clone());
                     }
-                    measured.lock().unwrap().push((path, r.bytes, true));
+                    // Not after a denied or stalled du: the walk could not be killed if it hung on a privacy prompt.
+                    let shared = !r.denied && !cancel.load(Ordering::Relaxed) && has_hard_links(&path, HARD_LINK_SCAN_CAP, &cancel);
+                    measured.lock().unwrap().push((path, r.bytes, true, shared));
                 }
             }
             done.fetch_add(1, Ordering::Relaxed);
@@ -349,11 +393,11 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     let cancelled = cancel.load(Ordering::Relaxed);
 
     let mut list = std::mem::take(&mut *measured.lock().unwrap());
-    list.retain(|(_, size, _)| *size >= opts.min_size);
+    list.retain(|(_, size, _, _)| *size >= opts.min_size);
     list.sort_by(|a, b| b.1.cmp(&a.1));
     list.truncate(opts.limit);
 
-    let paths: Vec<String> = list.iter().map(|(p, _, _)| p.clone()).collect();
+    let paths: Vec<String> = list.iter().map(|(p, _, _, _)| p.clone()).collect();
     on_progress(Progress { phase: "measuring", current: String::new(), done: done.load(Ordering::Relaxed), total });
     // A cancelled scan (stopped by the user or replaced by a new scan) returns at once, without dates.
     let used = if cancelled {
@@ -366,7 +410,7 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     let items = list
         .into_iter()
         .zip(used)
-        .map(|((path, size, dir), last_used_ms)| {
+        .map(|((path, size, dir, shared), last_used_ms)| {
             let modified_ms = fs::symlink_metadata(&path).ok().as_ref().and_then(mtime_ms);
             let name = path.rsplit('/').next().unwrap_or("").to_string();
             ScanItem {
@@ -378,6 +422,7 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
                 dir,
                 modified_ms,
                 last_used_ms,
+                shared,
             }
         })
         .collect();
@@ -489,5 +534,52 @@ mod tests {
         assert!(res.cancelled);
         assert!(!phases.contains(&"listing"), "listing ran after cancel: {phases:?}");
         assert!(!phases.contains(&"dates"), "dates ran after cancel: {phases:?}");
+    }
+
+    /// #34: one file hard-linked into three folders. du counts it in full for each folder,
+    /// so every item that holds a link is marked as shared; a folder without links is not.
+    #[test]
+    fn hardlinks_are_marked_shared() {
+        let dir = temp_dir("hardlinks");
+        for d in ["store", "proj1", "proj2", "plain"] {
+            fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        fs::write(dir.join("store/blob.bin"), vec![3u8; 1_000_000]).unwrap();
+        fs::hard_link(dir.join("store/blob.bin"), dir.join("proj1/blob.bin")).unwrap();
+        fs::create_dir_all(dir.join("proj2/deep/er")).unwrap();
+        fs::hard_link(dir.join("store/blob.bin"), dir.join("proj2/deep/er/blob.bin")).unwrap();
+        fs::hard_link(dir.join("store/blob.bin"), dir.join("loose.bin")).unwrap();
+        fs::write(dir.join("plain/own.bin"), vec![4u8; 1_000_000]).unwrap();
+        fs::write(dir.join("alone.bin"), vec![5u8; 1_000_000]).unwrap();
+        let res = run_scan(
+            ScanOptions { home: "/nonexistent-home".into(), folder: Some(dir.to_string_lossy().into()), min_size: 0, limit: 100 },
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        let shared = |name: &str| res.items.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("{name} missing")).shared;
+        for name in ["store", "proj1", "proj2", "loose.bin"] {
+            assert!(shared(name), "{name} holds a hard link but is not marked shared");
+        }
+        for name in ["plain", "alone.bin"] {
+            assert!(!shared(name), "{name} has no hard links but is marked shared");
+        }
+    }
+
+    /// #34: the walk gives up after `cap` entries and stops on cancel, answering false.
+    #[test]
+    fn hard_link_walk_is_capped() {
+        let dir = temp_dir("hardlink-cap");
+        fs::write(dir.join("a.bin"), b"a").unwrap();
+        fs::hard_link(dir.join("a.bin"), dir.join("b.bin")).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        let found = has_hard_links(&path, 100, &AtomicBool::new(false));
+        let capped = has_hard_links(&path, 0, &AtomicBool::new(false));
+        let cancelled = has_hard_links(&path, 100, &AtomicBool::new(true));
+        let _ = fs::remove_dir_all(&dir);
+        assert!(found);
+        assert!(!capped);
+        assert!(!cancelled);
     }
 }

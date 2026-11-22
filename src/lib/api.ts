@@ -11,6 +11,8 @@ export interface ScanItem {
   lastUsedMs: number | null;
   /** Hard block reason from the Rust side. Such items can never be moved to the Trash. */
   blocked: string | null;
+  /** Holds a file with more than one hard link (#34), so the Trash may free less than `size`. */
+  shared: boolean;
 }
 
 export interface ScanResult {

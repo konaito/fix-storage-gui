@@ -3,7 +3,7 @@ import { api, type PreviewResult } from "../../lib/api";
 import { describeError } from "../../lib/errors";
 import { agoJa, formatBytes, isoDate } from "../../lib/format";
 import { kindLabel, locationParts } from "../../lib/kind";
-import { AI_VERDICT_JA, CATEGORY_JA, CLI_VERDICT_JA, sourceJa, verdictClass, verdictJa, whyNotSelectable } from "../../lib/labels";
+import { AI_VERDICT_JA, CATEGORY_JA, CLI_VERDICT_JA, SHARED_NOTE_JA, sourceJa, verdictClass, verdictJa, whyNotSelectable } from "../../lib/labels";
 import type { Row } from "../../lib/rows";
 import { selectable } from "../../safety/merge";
 import { useGate } from "../GateContext";
@@ -137,6 +137,7 @@ export function InfoPanel({ row, home, selected, onToggle, onDrill }: Props) {
               </div>
             )}
             {row.dir && <div className="muted tiny">ディスク上の使用量（du で計測）</div>}
+            {row.shared && <div className="warn tiny">{SHARED_NOTE_JA}（ハードリンクがあり、ほかの場所と中身を共有しています）</div>}
           </dd>
           <dt>場所</dt>
           <dd className="crumbs" title={row.path}>
