@@ -121,4 +121,6 @@ export const api = {
   siwcModels: () => invoke<Model[]>("siwc_models"),
   siwcRespond: (requestId: string, model: string, instructions: string, input: string) =>
     invoke<string>("siwc_respond", { requestId, model, instructions, input }),
+  /** Drops the HTTP stream of one siwc_respond call (#21). Unknown or finished IDs are ignored. */
+  siwcCancel: (requestId: string) => invoke<void>("siwc_cancel", { requestId }),
 };

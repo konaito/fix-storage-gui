@@ -8,14 +8,102 @@ pub mod store;
 
 use error::SiwcError;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use store::{AccountMeta, Credentials, Store};
+use tokio::sync::watch;
 
 /// ChatGPT Settings → Usage (same URL as the official DevKit's CHATGPT_USAGE_URL).
 pub const USAGE_URL: &str = "https://chatgpt.com/settings/usage";
+
+/// Longest wait for the next bytes of a response (headers or a stream chunk). A stalled stream
+/// ends as `interrupted` instead of hanging (#21). Our own choice; the docs give no number.
+pub const READ_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Longest time one Responses API stream may take in total, ending as `ai_timeout` (#21).
+/// Our own choice for a batch of 25 items; the docs give no number.
+pub const RESPOND_LIMIT: Duration = Duration::from_secs(300);
+
+pub(crate) fn http_client(read_timeout: Duration) -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(concat!("fix-storage-gui/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(read_timeout)
+        .build()
+        .expect("http client")
+}
+
+/// Cancel switches for in-flight `respond` calls, keyed by the UI's request ID (#21).
+#[derive(Default)]
+pub(crate) struct Cancels {
+    inner: std::sync::Mutex<CancelsInner>,
+}
+
+#[derive(Default)]
+struct CancelsInner {
+    live: HashMap<String, watch::Sender<bool>>,
+    /// IDs cancelled before their request reached Rust.
+    early: HashSet<String>,
+}
+
+/// Bound for `early`: a cancel that loses the race with a finished request would otherwise stay forever.
+const EARLY_CANCELS_MAX: usize = 256;
+
+impl Cancels {
+    pub(crate) fn register(&self, id: &str) -> CancelGuard<'_> {
+        let mut inner = self.inner.lock().unwrap();
+        let already = inner.early.remove(id);
+        let (tx, rx) = watch::channel(already);
+        inner.live.insert(id.to_string(), tx);
+        CancelGuard { cancels: self, id: id.to_string(), rx }
+    }
+
+    pub(crate) fn cancel(&self, id: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.live.get(id) {
+            Some(tx) => {
+                let _ = tx.send(true);
+            }
+            None => {
+                if inner.early.len() >= EARLY_CANCELS_MAX {
+                    inner.early.clear();
+                }
+                inner.early.insert(id.to_string());
+            }
+        }
+    }
+}
+
+pub(crate) struct CancelGuard<'a> {
+    cancels: &'a Cancels,
+    id: String,
+    rx: watch::Receiver<bool>,
+}
+
+impl Drop for CancelGuard<'_> {
+    fn drop(&mut self) {
+        self.cancels.inner.lock().unwrap().live.remove(&self.id);
+    }
+}
+
+/// Runs `fut` until it finishes, `limit` passes (`ai_timeout`) or the request is cancelled
+/// (`ai_cancelled`). Dropping `fut` closes its HTTP stream.
+pub(crate) async fn guarded<T>(fut: impl Future<Output = Result<T, SiwcError>>, limit: Duration, cancel: &mut watch::Receiver<bool>) -> Result<T, SiwcError> {
+    let cancelled = async {
+        if cancel.wait_for(|c| *c).await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    };
+    tokio::select! {
+        biased;
+        _ = cancelled => Err(SiwcError::new("ai_cancelled", "中止しました")),
+        r = tokio::time::timeout(limit, fut) => r.unwrap_or_else(|_| Err(SiwcError::new("ai_timeout", format!("{} 秒以内に応答が終わりませんでした", limit.as_secs())))),
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +137,7 @@ pub struct Siwc {
     http: reqwest::Client,
     refresh_lock: tokio::sync::Mutex<()>,
     sign_in_cancel: std::sync::Mutex<Option<Arc<AtomicBool>>>,
+    respond_cancels: Cancels,
 }
 
 fn now() -> i64 {
@@ -65,12 +154,14 @@ fn label_for(m: &AccountMeta) -> String {
 
 impl Siwc {
     pub fn new(dir: PathBuf) -> Self {
-        let http = reqwest::Client::builder()
-            .user_agent(concat!("fix-storage-gui/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(Duration::from_secs(15))
-            .build()
-            .expect("http client");
-        Self { store: Store::new(dir), http, refresh_lock: tokio::sync::Mutex::new(()), sign_in_cancel: std::sync::Mutex::new(None) }
+        let http = http_client(READ_TIMEOUT);
+        Self {
+            store: Store::new(dir),
+            http,
+            refresh_lock: tokio::sync::Mutex::new(()),
+            sign_in_cancel: std::sync::Mutex::new(None),
+            respond_cancels: Cancels::default(),
+        }
     }
 
     pub fn status(&self) -> Result<Status, SiwcError> {
@@ -297,16 +388,24 @@ impl Siwc {
     /// Streams one Responses API request. Concurrent calls are supported: each has its own
     /// HTTP stream, and `siwc_respond` does not take a global lock around inference.
     /// Token refresh is single-flight (see `access_token`).
-    pub async fn respond(&self, model: &str, instructions: &str, input: &str, on_delta: impl FnMut(usize) + Clone) -> Result<String, SiwcError> {
+    /// `cancel_respond(request_id)` or `RESPOND_LIMIT` ends the stream (#21). Only the stream is
+    /// cut short: a token refresh always runs to the end, so a rotated refresh token is saved.
+    pub async fn respond(&self, request_id: &str, model: &str, instructions: &str, input: &str, on_delta: impl FnMut(usize) + Clone) -> Result<String, SiwcError> {
+        let mut guard = self.respond_cancels.register(request_id);
         let (_, token) = self.access_token(None).await?;
-        match api::respond(&self.http, &token, model, instructions, input, on_delta.clone()).await {
+        match guarded(api::respond(&self.http, &token, model, instructions, input, on_delta.clone()), RESPOND_LIMIT, &mut guard.rx).await {
             // Retry once with a fresh token; a terminal refresh error turns into reauth_required.
             Err(e) if e.status == Some(401) => {
                 let (_, token) = self.access_token(Some(&token)).await?;
-                api::respond(&self.http, &token, model, instructions, input, on_delta).await
+                guarded(api::respond(&self.http, &token, model, instructions, input, on_delta), RESPOND_LIMIT, &mut guard.rx).await
             }
             other => other,
         }
+    }
+
+    /// Cancels the `respond` call with this request ID, or the next one to start with it.
+    pub fn cancel_respond(&self, request_id: &str) {
+        self.respond_cancels.cancel(request_id);
     }
 
     /// Revokes the refresh token (best effort with retries), then clears local tokens.
@@ -340,6 +439,79 @@ pub(crate) fn needs_refresh(creds: &store::Credentials, now: i64, stale_access_t
 mod tests {
     use super::*;
     use store::Credentials;
+
+    /// A local server that sends the response headers and one SSE event, then goes silent
+    /// without closing the connection (a stalled stream after a Wi-Fi switch or sleep, #21).
+    fn stalled_server() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let _ = sock.read(&mut buf);
+            let event = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"{\"}\n\n";
+            let head = format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n{:x}\r\n{event}\r\n", event.len());
+            sock.write_all(head.as_bytes()).unwrap();
+            sock.flush().unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+            drop(sock);
+        });
+        format!("http://{addr}/v1/responses")
+    }
+
+    #[tokio::test]
+    async fn stalled_stream_does_not_hang_respond() {
+        let url = stalled_server();
+        // Siwc::new's client, with a read timeout short enough for a test.
+        let http = http_client(Duration::from_millis(300));
+        let r = tokio::time::timeout(Duration::from_secs(3), api::respond_to(&http, &url, "tok", "m", "i", "x", |_| {})).await;
+        let Ok(r) = r else { panic!("respond was still waiting after 3 s on a stalled stream") };
+        assert_eq!(r.unwrap_err().kind, "interrupted");
+    }
+
+    #[tokio::test]
+    async fn guarded_gives_up_after_the_limit() {
+        let (_tx, mut rx) = watch::channel(false);
+        let r = guarded(std::future::pending::<Result<(), SiwcError>>(), Duration::from_millis(50), &mut rx).await;
+        assert_eq!(r.unwrap_err().kind, "ai_timeout");
+    }
+
+    #[tokio::test]
+    async fn guarded_passes_results_through() {
+        let (_tx, mut rx) = watch::channel(false);
+        assert_eq!(guarded(async { Ok::<_, SiwcError>(7) }, Duration::from_secs(5), &mut rx).await.unwrap(), 7);
+    }
+
+    #[tokio::test]
+    async fn cancel_ends_a_request_that_never_answers() {
+        let cancels = Arc::new(Cancels::default());
+        let c2 = cancels.clone();
+        let task = tokio::spawn(async move {
+            let mut g = c2.register("req-1");
+            guarded(std::future::pending::<Result<(), SiwcError>>(), Duration::from_secs(60), &mut g.rx).await
+        });
+        // Let the task register first.
+        while !cancels.inner.lock().unwrap().live.contains_key("req-1") {
+            tokio::task::yield_now().await;
+        }
+        cancels.cancel("req-1");
+        let r = tokio::time::timeout(Duration::from_secs(2), task).await.expect("cancel did not end the request").unwrap();
+        assert_eq!(r.unwrap_err().kind, "ai_cancelled");
+        assert!(cancels.inner.lock().unwrap().live.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancel_before_the_request_starts_still_applies() {
+        let cancels = Cancels::default();
+        cancels.cancel("req-2");
+        let mut g = cancels.register("req-2");
+        let r = guarded(std::future::pending::<Result<(), SiwcError>>(), Duration::from_secs(60), &mut g.rx).await;
+        assert_eq!(r.unwrap_err().kind, "ai_cancelled");
+        drop(g);
+        let inner = cancels.inner.lock().unwrap();
+        assert!(inner.live.is_empty() && inner.early.is_empty());
+    }
 
     fn creds(access: &str, expires_at: i64) -> Credentials {
         Credentials {

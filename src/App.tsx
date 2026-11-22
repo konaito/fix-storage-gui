@@ -68,7 +68,8 @@ export default function App() {
   const [aiDialog, setAiDialog] = useState(false);
   const [aiRun, setAiRun] = useState<AiRun | null>(null);
   const [aiOutcome, setAiOutcome] = useState<AiOutcome | null>(null);
-  const aiStop = useRef(false);
+  // Stopping the AI run aborts this; runBatches returns without waiting for requests in flight (#21).
+  const aiAbort = useRef<AbortController | null>(null);
   // Signed-in users with plan usage: open the AI send dialog once after each scan (#12). Cancelling does not reopen it.
   const [autoAi, setAutoAi] = useState(false);
 
@@ -102,6 +103,8 @@ export default function App() {
   const view = useMemo(() => rows.map((r) => forDisplay(r, planReady)), [rows, planReady]);
   // AI review targets: everything not locked by the hard block list or fix-storage's rules.
   const aiTargets = useMemo(() => view.filter((r) => !r.final.locked), [view]);
+  // What a run sends: only targets the AI has not judged yet, so "もう一度判定する" does not resend judged rows (#27).
+  const aiPending = useMemo(() => aiTargets.filter((r) => !r.ai), [aiTargets]);
   useEffect(() => {
     dispatch({ type: "mode", aiFirst: planReady, aiTargets: aiTargets.length });
     if (!planReady) setAutoAi(false);
@@ -230,9 +233,11 @@ export default function App() {
     setAiDialog(false);
     if (!env || !model || flow.busy || !planReady) return;
     const maskOpts = { enabled: mask, home: env.home, user: env.user };
-    const indexed = aiTargets.map((r, i) => ({ id: `i${i}`, row: r }));
+    const indexed = aiPending.map((r, i) => ({ id: `i${i}`, row: r }));
+    if (indexed.length === 0) return;
     const batches = chunk(indexed, BATCH);
-    aiStop.current = false;
+    const abort = new AbortController();
+    aiAbort.current = abort;
     setAiOutcome(null);
     setAiRun({
       done: 0,
@@ -248,6 +253,8 @@ export default function App() {
     dispatch({ type: "aiStart" });
     const results = new Map<string, AiJudgement>();
     let missing = 0;
+    let failed = 0;
+    let failedReason: string | null = null;
     let stopped = false;
     let err: string | null = null;
     try {
@@ -255,10 +262,10 @@ export default function App() {
         batches,
         concurrency: DEFAULT_CONCURRENCY,
         itemCount: (batch) => batch.length,
-        shouldStop: () => aiStop.current,
-        send: (batch, _index, onChars) => {
+        signal: abort.signal,
+        send: (batch, _index, onChars, signal) => {
           const payload = batch.map(({ id, row }) => toPayload(id, row, maskOpts));
-          return PROVIDER.judge(payload, { model, onProgress: onChars });
+          return PROVIDER.judge(payload, { model, onProgress: onChars, signal });
         },
         onBatchComplete: (_index, judged, batch) => {
           const byId = new Map(judged.map((j) => [j.id, j]));
@@ -285,6 +292,9 @@ export default function App() {
         },
       });
       stopped = outcome.stopped;
+      // Batches that failed twice stay unjudged; the rest of the run went on (#27).
+      failed = outcome.failed.reduce((n, f) => n + batches[f.index].length, 0);
+      failedReason = outcome.failed.length > 0 ? describeError(outcome.failed[outcome.failed.length - 1].error) : null;
       if (outcome.error) {
         handleAiError(outcome.error);
         err = describeError(outcome.error);
@@ -293,8 +303,9 @@ export default function App() {
       handleAiError(e);
       err = describeError(e);
     } finally {
+      if (aiAbort.current === abort) aiAbort.current = null;
       setAiRun(null);
-      setAiOutcome({ judged: results.size, missing, stopped, error: err });
+      setAiOutcome({ judged: results.size, missing, failed, failedReason, stopped, error: err });
       dispatch({ type: "aiEnd", ok: !err && results.size > 0 });
     }
   }
@@ -440,7 +451,7 @@ export default function App() {
           modelName={modelInfo?.displayName ?? null}
           modelsLoading={modelsLoading}
           destination={PROVIDER.destination}
-          targets={aiTargets.length}
+          targets={aiPending.length}
           batchSize={BATCH}
           running={aiRun}
           outcome={aiOutcome}
@@ -448,7 +459,7 @@ export default function App() {
           selectedCount={chosen.length}
           onOpenSend={() => setAiDialog(true)}
           onStop={() => {
-            aiStop.current = true;
+            aiAbort.current?.abort();
             setAiRun((s) => (s ? { ...s, stopRequested: true } : s));
           }}
           onGoReview={() => go("review")}
@@ -569,7 +580,7 @@ export default function App() {
 
       {aiDialog && env && planReady && (
         <AiSendDialog
-          rows={aiTargets}
+          rows={aiPending}
           provider={PROVIDER}
           model={modelInfo}
           home={env.home}

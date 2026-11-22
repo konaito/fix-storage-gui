@@ -21,6 +21,9 @@ export interface AiRun {
 export interface AiOutcome {
   judged: number;
   missing: number;
+  /** Items in batches that failed even after one retry; they stay unjudged (#27). */
+  failed: number;
+  failedReason: string | null;
   stopped: boolean;
   error: string | null;
 }
@@ -37,6 +40,7 @@ interface Props {
   modelName: string | null;
   modelsLoading: boolean;
   destination: string;
+  /** Targets the AI has not judged yet: what the next run sends. */
   targets: number;
   batchSize: number;
   running: AiRun | null;
@@ -67,8 +71,13 @@ export function AiStep(p: Props) {
       >
         {p.outcome ? (
           <>
-            <button type="button" onClick={p.onOpenSend} disabled={!(p.planReady && !!p.modelName && p.targets > 0)}>
-              もう一度判定する…
+            <button
+              type="button"
+              onClick={p.onOpenSend}
+              disabled={!(p.planReady && !!p.modelName && p.targets > 0)}
+              title={p.targets === 0 ? "未判定の項目はありません" : `未判定の ${p.targets} 件だけを送ります`}
+            >
+              もう一度判定する（未判定 {p.targets} 件）…
             </button>
             <button type="button" className="primary large" onClick={p.onGoReview} disabled={!p.canGoReview}>
               結果を一覧で確認する →
@@ -124,6 +133,7 @@ export function AiStep(p: Props) {
             <>
               <p>{p.outcome.error}</p>
               {p.outcome.judged > 0 && <p className="muted small">{p.outcome.judged} 件は判定済みで、一覧に反映しています。</p>}
+              {p.outcome.failed > 0 && <FailedNote count={p.outcome.failed} reason={p.outcome.failedReason} />}
               {p.aiFirst && <p className="muted small">AI が判定していない項目は「未判定」になり、選べません。</p>}
             </>
           ) : (
@@ -135,6 +145,7 @@ export function AiStep(p: Props) {
                   {p.aiFirst ? "「未判定」のままで、選べません。" : "元 CLI の判定のままです。"}
                 </p>
               )}
+              {p.outcome.failed > 0 && <FailedNote count={p.outcome.failed} reason={p.outcome.failedReason} />}
               {p.outcome.stopped && p.aiFirst && <p className="muted small">中止までに判定できなかった項目は「未判定」のままで、選べません。</p>}
             </>
           )}
@@ -171,16 +182,27 @@ export function AiStep(p: Props) {
         </div>
       ) : !p.modelName ? (
         <div className="callout warn-box">モデル一覧を取得できていません。右のパネルの「再読み込み」を試してください。</div>
+      ) : p.targets === 0 ? (
+        <div className="callout">未判定の項目はありません。</div>
       ) : (
         <div className="callout">
           <div>
-            対象 <strong>{p.targets} 件</strong>（保護されている項目は送りません）・{batches} 回に分け、最大 {DEFAULT_CONCURRENCY} 件まで同時に送信・モデル{" "}
+            対象 <strong>{p.targets} 件</strong>（判定済みと保護されている項目は送りません）・{batches} 回に分け、最大 {DEFAULT_CONCURRENCY} 件まで同時に送信・モデル{" "}
             <strong>{p.modelName}</strong>
           </div>
         </div>
       )}
 
     </section>
+  );
+}
+
+function FailedNote({ count, reason }: { count: number; reason: string | null }) {
+  return (
+    <p className="muted small">
+      {count} 件は 2 回送っても応答を読めなかったため、「未判定」のままです。「もう一度判定する」で未判定の分だけを送り直せます。
+      {reason && `（${reason}）`}
+    </p>
   );
 }
 
@@ -199,7 +221,7 @@ function AiRunning({ run, eyebrow, destination, onStop }: { run: AiRun; eyebrow:
       <StepBar
         eyebrow={eyebrow}
         busy
-        title={run.stopRequested ? "送信中の分が終わったら中止します…" : "AI が判定しています"}
+        title={run.stopRequested ? "中止しています…" : "AI が判定しています"}
         desc="送っているのはメタデータだけです。結果はバッチごとに一覧へ反映されます。"
         meta={
           <span className="num">
@@ -208,7 +230,7 @@ function AiRunning({ run, eyebrow, destination, onStop }: { run: AiRun; eyebrow:
         }
       >
         <button type="button" onClick={onStop} disabled={run.stopRequested}>
-          {run.stopRequested ? "中止を待っています…" : "中止（送信中の分が終わったら）"}
+          {run.stopRequested ? "中止しています…" : "中止"}
         </button>
       </StepBar>
       <LoadingPanel>
