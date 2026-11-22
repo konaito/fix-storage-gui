@@ -18,7 +18,7 @@ export const chatGptProvider: JudgeProvider = {
       if (e.payload.requestId === requestId) options.onProgress?.(e.payload.chars);
     });
     try {
-      const text = await api.siwcRespond(requestId, options.model, INSTRUCTIONS, buildInput(items));
+      const text = await api.siwcRespond(requestId, options.clientId, options.model, INSTRUCTIONS, buildInput(items));
       return parseJudgements(text, new Set(items.map((i) => i.id)));
     } finally {
       unlisten();

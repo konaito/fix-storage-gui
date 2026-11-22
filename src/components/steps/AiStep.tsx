@@ -37,7 +37,10 @@ interface Props {
   modelName: string | null;
   modelsLoading: boolean;
   destination: string;
+  /** Rows the next run sends: the ones the AI has not judged yet, or all when every row has a verdict. */
   targets: number;
+  /** Rows that already have an AI verdict and are not sent again (a run cut short, e.g. by a sign-in that stopped working; #75). */
+  alreadyJudged: number;
   batchSize: number;
   running: AiRun | null;
   outcome: AiOutcome | null;
@@ -68,7 +71,7 @@ export function AiStep(p: Props) {
         {p.outcome ? (
           <>
             <button type="button" onClick={p.onOpenSend} disabled={!(p.planReady && !!p.modelName && p.targets > 0)}>
-              もう一度判定する…
+              {p.alreadyJudged > 0 ? `未判定の ${p.targets} 件を判定する…` : "もう一度判定する…"}
             </button>
             <button type="button" className="primary large" onClick={p.onGoReview} disabled={!p.canGoReview}>
               結果を一覧で確認する →
@@ -174,7 +177,7 @@ export function AiStep(p: Props) {
       ) : (
         <div className="callout">
           <div>
-            対象 <strong>{p.targets} 件</strong>（保護されている項目は送りません）・{batches} 回に分け、最大 {DEFAULT_CONCURRENCY} 件まで同時に送信・モデル{" "}
+            対象 <strong>{p.targets} 件</strong>（保護されている項目{p.alreadyJudged > 0 ? `と判定済みの ${p.alreadyJudged} 件` : ""}は送りません）・{batches} 回に分け、最大 {DEFAULT_CONCURRENCY} 件まで同時に送信・モデル{" "}
             <strong>{p.modelName}</strong>
           </div>
         </div>

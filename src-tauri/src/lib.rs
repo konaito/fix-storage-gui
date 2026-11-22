@@ -228,8 +228,20 @@ async fn siwc_sign_out(app: tauri::AppHandle, state: State<'_, AppState>) -> Res
 }
 
 #[tauri::command]
-async fn siwc_models(state: State<'_, AppState>) -> Result<Vec<siwc::api::Model>, SiwcError> {
-    state.siwc.models().await
+async fn siwc_models(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<siwc::api::Model>, SiwcError> {
+    let res = state.siwc.models().await;
+    notify_if_signed_out(&app, &res);
+    res
+}
+
+/// A token that stopped working (refresh refused, registration gone) changes the stored sign-in
+/// state; the login gate reads it again instead of staying "ready" (#29).
+fn notify_if_signed_out<T>(app: &tauri::AppHandle, res: &Result<T, SiwcError>) {
+    if let Err(e) = res {
+        if let Some(reason) = siwc::sign_in_change(&e.kind) {
+            notify_siwc_changed(app, reason, None);
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -240,11 +252,22 @@ struct AiProgress {
 }
 
 #[tauri::command]
-async fn siwc_respond(app: tauri::AppHandle, state: State<'_, AppState>, request_id: String, model: String, instructions: String, input: String) -> Result<String, SiwcError> {
+async fn siwc_respond(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    request_id: String,
+    client_id: String,
+    model: String,
+    instructions: String,
+    input: String,
+) -> Result<String, SiwcError> {
+    let emitter = app.clone();
     let on_delta = move |chars: usize| {
-        let _ = app.emit("ai-progress", AiProgress { request_id: request_id.clone(), chars });
+        let _ = emitter.emit("ai-progress", AiProgress { request_id: request_id.clone(), chars });
     };
-    state.siwc.respond(&model, &instructions, &input, on_delta).await
+    let res = state.siwc.respond(&client_id, &model, &instructions, &input, on_delta).await;
+    notify_if_signed_out(&app, &res);
+    res
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -259,7 +282,21 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
             app_menu::install(app)?;
             let dir = app.path().app_data_dir()?.join("siwc");
-            app.manage(AppState { siwc: siwc::Siwc::new(dir), scan_cancel: Mutex::new(None), preview_gen: Default::default() });
+            let siwc = siwc::Siwc::new(dir);
+            // Keychain items that accounts.json doesn't know: picked here, before any sign-in can
+            // store a new item, then revoked and deleted in the background. A broken accounts.json
+            // skips this (status() reports it) instead of treating every item as orphaned.
+            let orphans = siwc.orphan_credentials().unwrap_or_else(|e| {
+                eprintln!("siwc: skipped keychain cleanup: {e}");
+                Vec::new()
+            });
+            app.manage(AppState { siwc, scan_cancel: Mutex::new(None), preview_gen: Default::default() });
+            if !orphans.is_empty() {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    handle.state::<AppState>().siwc.remove_orphans(orphans).await;
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

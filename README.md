@@ -54,7 +54,7 @@ AI 判定には OpenAI の [Sign in with ChatGPT](https://developers.openai.com/
 - PKCE（S256）・`state`・`nonce` を毎回生成。コールバックは `http://127.0.0.1:1455/auth/callback`（使用中なら空いているポート、パスは固定）。
 - ID トークンは OpenAI の JWKS で署名を検証し、`iss`・`aud`（発行済み client_id）・`exp`・`nonce` を確認。付与スコープに `chatgpt.tokens.use.direct` があるかで、プランの利用可否を判断します。
 - トークンは **macOS のキーチェーン** に保存します（Web ビュー側には渡しません）。アカウントの非秘密情報（client_id、メールなど）だけをアプリのデータフォルダに `0600` で保存します。
-- 期限が近づいたらリフレッシュ（同時実行しないよう直列化。401 が重なっても、すでに更新済みのトークンは再リフレッシュしません）。サインアウト時は refresh token を失効（revocation）させてからローカルのトークンを消します。
+- 期限が近づいたらリフレッシュ（同時実行しないよう直列化。401 が重なっても、すでに更新済みのトークンは再リフレッシュしません）。サインアウト時は、保存済みのすべてのアカウントについて refresh token を失効（revocation）させてからローカルのトークンを消します。同じ ChatGPT アカウントの登録は 1 つにまとめ、起動時には `accounts.json` に無いキーチェーンの項目を失効させて消します。
 - モデルは `GET /v1/models` で取得して選択（`visibility: "list"` のみ、サーバーの順番のまま）。**モデル名はハードコードしていません。**
 - 推論は `POST /v1/responses` に `store: false`・`stream: true` で送り、`response.completed` を受け取ったときだけ成功とします。
 - 「ChatGPT プランを使用中」表示と「使用量を管理」ボタン、初回のみの案内ダイアログ、使用量上限（`subscription_sharing_usage_limit_exceeded`）時のダイアログ、同意拒否・プラン未許可・失効（再サインイン）などのエラー処理があります。

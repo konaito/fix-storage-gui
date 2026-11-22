@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { AppIcon } from "./AppIcon";
 import type { AccountView } from "../lib/api";
-import { SIWC_DOCS, type GateView } from "../lib/gate";
+import { SIWC_DOCS, primarySignInTarget, type GateView } from "../lib/gate";
 import { Spinner } from "./Loader";
 import { UpdateCheckButton } from "./UpdateBanner";
 
@@ -133,15 +133,15 @@ function StatePanel(p: Props) {
   }
 
   const reauth = v.reauth;
-  const others = p.saved.filter((a) => a.clientId !== reauth?.clientId);
-  const choices = reauth ? others : p.saved;
+  const target = primarySignInTarget(reauth, p.saved);
+  const choices = p.saved.filter((a) => a.clientId !== target?.clientId);
   return (
     <>
       <Lead>AI 判定は、あなたの ChatGPT プランの使用量で動きます。アプリ自体は無料で、API キーも不要です。</Lead>
       {reauth && <p className="warn login-message">前回のサインイン（{reauth.label}）が使えなくなりました。もう一度サインインしてください。</p>}
       {p.error && <ErrorBox error={p.error} />}
       <div className="login-actions">
-        <button className="chatgpt-button login-cta" onClick={() => p.onSignIn(reauth ? reauth.clientId : null, false)}>
+        <button className="chatgpt-button login-cta" onClick={() => p.onSignIn(target ? target.clientId : null, false)}>
           Continue with ChatGPT
         </button>
         {choices.length > 0 && (
@@ -157,7 +157,7 @@ function StatePanel(p: Props) {
       </div>
       <p className="login-fine">
         ボタンを押すとブラウザが開きます。初回は、ブラウザでこのアプリの登録と許可内容を確認します。
-        {reauth && (
+        {target && (
           <>
             {" "}
             <button className="link" onClick={() => p.onSignIn(null, false)}>
@@ -240,7 +240,7 @@ function Docs({ onOpenDoc, onManageUsage }: { onOpenDoc: (url: string) => void; 
             <strong>トークンは macOS のキーチェーンに保存します。</strong>アプリの画面（Web ビュー）側には渡しません。
           </li>
           <li>
-            <strong>サインアウトすると</strong>、ChatGPT 側のセッションを取り消してから、この Mac のトークンを消します。ChatGPT の設定から、いつでもこのアプリの接続を解除できます。
+            <strong>サインアウトすると</strong>、保存済みのすべてのアカウントについて、ChatGPT 側のセッションを取り消してから、この Mac のトークンを消します。ChatGPT の設定から、いつでもこのアプリの接続を解除できます。
           </li>
           <li>
             使用量は ChatGPT の設定で確認・管理できます。ChatGPT Plus の 5 時間あたりの上限は、ChatGPT プランを使うすべてのアプリで共有されます。{" "}
