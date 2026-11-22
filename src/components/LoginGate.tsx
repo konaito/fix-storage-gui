@@ -107,6 +107,7 @@ export function LoginGate({ children }: { children: ReactNode }) {
   const cancelSignIn = useCallback(() => void api.siwcCancelSignIn(), []);
 
   const reportApp = useCallback((hasResults: boolean, busy: string | null) => dispatch({ type: "app", hasResults, busy }), []);
+  const signInLost = useCallback((reason: "reauth" | "client_revoked") => dispatch({ type: "lost", reason }), []);
 
   const screen = gateScreen(gate, (clientId) => ruleOnly[clientId] ?? ruleOnlyChoice.get(clientId));
 
@@ -128,6 +129,7 @@ export function LoginGate({ children }: { children: ReactNode }) {
       refreshStatus: refresh,
       enablePlan,
       reportApp,
+      signInLost,
     };
     return (
       <GateContext.Provider value={value}>

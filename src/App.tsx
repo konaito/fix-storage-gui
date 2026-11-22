@@ -137,7 +137,10 @@ export default function App() {
   function handleAiError(e: unknown) {
     if (isSiwcError(e)) {
       if (e.kind === "usage_limit") setUsageLimit(true);
-      // The gate also hears "reauth" from Rust (#29); reading status here covers plan_not_enabled.
+      // The gate also hears "reauth" from Rust (#29), but maybe after this status read: tell it first so
+      // the results stay on screen (#75). Reading status here also covers plan_not_enabled.
+      if (e.kind === "reauth_required") gate.signInLost("reauth");
+      if (e.kind === "client_revoked") gate.signInLost("client_revoked");
       if (e.kind === "reauth_required" || e.kind === "client_revoked" || e.kind === "plan_not_enabled") void refreshStatus();
     }
     setError(describeError(e));
@@ -408,7 +411,7 @@ export default function App() {
           }}
           onRescan={() => void runScan(scanned, false)}
           onChangeTarget={() => go("target")}
-          aiTargets={aiQueue.length}
+          aiTargets={flow.aiDone ? aiTargets.length : aiQueue.length}
           onGoAi={() => go("ai")}
           onGoTrash={() => go("trash")}
           home={env?.home ?? null}

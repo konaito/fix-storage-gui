@@ -102,7 +102,9 @@ export type GateAction =
   | { type: "error"; error: GateError | null }
   | { type: "changed"; event: SiwcChanged }
   | { type: "dismissNotice" }
-  | { type: "app"; hasResults: boolean; busy: string | null };
+  | { type: "app"; hasResults: boolean; busy: string | null }
+  /** The app's own request failed with reauth_required / client_revoked; sent before it reads status again. */
+  | { type: "lost"; reason: "reauth" | "client_revoked" };
 
 export const SIGNED_OUT_NOTICE = "サインアウトしました。";
 export const SIGNED_OUT_UNREVOKED_NOTICE =
@@ -113,6 +115,14 @@ export const CLIENT_REVOKED_NOTICE =
 
 function lostSignInNotice(reason: "reauth" | "client_revoked"): string {
   return reason === "reauth" ? REAUTH_NOTICE : CLIENT_REVOKED_NOTICE;
+}
+
+/** A token stopped working during use. */
+function signInLost(s: GateModel, reason: "reauth" | "client_revoked"): GateModel {
+  // The app holds a scan result: keep it on screen with a bar to sign in again (#75).
+  if (s.appHasResults) return { ...s, keepApp: s.keepApp ?? reason };
+  // Otherwise say why the login screen is back, without replacing a notice that is already there (e.g. "signed out").
+  return { ...s, notice: s.notice ?? lostSignInNotice(reason) };
 }
 
 export function gateReducer(s: GateModel, a: GateAction): GateModel {
@@ -141,14 +151,12 @@ export function gateReducer(s: GateModel, a: GateAction): GateModel {
       if (a.event.reason === "signed_out") {
         return { ...next, error: null, keepApp: null, notice: a.event.remoteRevoked === false ? SIGNED_OUT_UNREVOKED_NOTICE : SIGNED_OUT_NOTICE };
       }
-      if (a.event.reason === "reauth" || a.event.reason === "client_revoked") {
-        // The app holds a scan result: keep it on screen with a bar to sign in again (#75).
-        if (s.appHasResults) return { ...next, keepApp: a.event.reason };
-        // Otherwise say why the login screen is back, without replacing a notice that is already there (e.g. "signed out").
-        return { ...next, notice: s.notice ?? lostSignInNotice(a.event.reason) };
-      }
+      if (a.event.reason === "reauth" || a.event.reason === "client_revoked") return signInLost(next, a.event.reason);
       return next;
     }
+    case "lost":
+      // Same as the siwc-changed event, which may arrive after the app's own status read (#75).
+      return signInLost(s, a.reason);
   }
 }
 

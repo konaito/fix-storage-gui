@@ -241,6 +241,17 @@ describe("keeping scan results when a token stops working (#75)", () => {
     expect(gateScreen(s, never)).toMatchObject({ kind: "app", planEnabled: false, bar: { kind: "rule_only" } });
   });
 
+  it("keeps the app when the app's own status read lands before the siwc-changed event", () => {
+    // App.handleAiError tells the gate first, then reads status; the event may arrive later or not at all.
+    const s = run([{ type: "lost", reason: "reauth" }, { type: "loaded", status: st([acc({ signedIn: false, needsReauth: true })]) }], withResults);
+    expect(gateScreen(s, never)).toMatchObject({ kind: "app", bar: { kind: "reauth", reason: "reauth" } });
+    const later = run([{ type: "changed", event: { reason: "reauth", remoteRevoked: null } }], s);
+    expect(gateScreen(later, never)).toMatchObject({ kind: "app", bar: { kind: "reauth" } });
+    // Without results (e.g. the model list failed before any scan) it stays the login screen.
+    const none = run([{ type: "lost", reason: "reauth" }, { type: "loaded", status: st([acc({ signedIn: false, needsReauth: true })]) }], ready);
+    expect(gateScreen(none, never).kind).toBe("login");
+  });
+
   it("keeps the app when reading status fails while the bar is up", () => {
     const s = run([{ type: "loadFailed", message: "keychain busy" }], reauthed(withResults));
     expect(gateScreen(s, never)).toMatchObject({ kind: "app", bar: { kind: "reauth" } });

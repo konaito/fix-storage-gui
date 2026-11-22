@@ -33,6 +33,8 @@ export interface GateState {
    * that stops working keeps the app on screen under a sign-in-again bar instead of the login screen (#75).
    */
   reportApp: (hasResults: boolean, busy: string | null) => void;
+  /** The app's own request failed because the sign-in stopped working. Call before `refreshStatus` (#75). */
+  signInLost: (reason: "reauth" | "client_revoked") => void;
 }
 
 const noop = async () => null;
@@ -50,6 +52,7 @@ export const GateContext = createContext<GateState>({
   refreshStatus: async () => {},
   enablePlan: () => {},
   reportApp: () => {},
+  signInLost: () => {},
 });
 
 export function useGate(): GateState {
