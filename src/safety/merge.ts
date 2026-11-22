@@ -42,7 +42,8 @@ export const PENDING_REASON = "AI がまだ判定していません";
 export function mergeVerdict(input: MergeInput): FinalVerdict {
   const f = baseVerdict(input);
   if (!input.gitInside || f.locked) return f;
-  // A folder with a repository inside is never "safe": it stays selectable, but only by hand (#80).
+  // A folder with a repository inside is never "safe", so "select all safe" leaves it out (#80).
+  // It stays selectable like any other "caution" row.
   return { ...f, verdict: f.verdict === "safe" ? "caution" : f.verdict, warning: gitWarning(input.gitInside) };
 }
 

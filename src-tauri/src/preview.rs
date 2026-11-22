@@ -323,6 +323,21 @@ mod tests {
         let _ = fs::remove_dir_all(&home);
     }
 
+    /// #80: a repository is blocked; a folder that only holds one further down is previewed.
+    #[test]
+    fn parents_of_repositories_are_previewed() {
+        let home = tmp("home-git");
+        let h = home.to_string_lossy().to_string();
+        fs::create_dir_all(home.join("dev/app/.git")).unwrap();
+        fs::write(home.join("dev/app/main.rs"), b"fn main() {}").unwrap();
+        let r = run(&format!("{h}/dev/app"), &h);
+        assert!(matches!(r.preview, Preview::Blocked { .. }), "{:?}", r.preview);
+        let r = run(&format!("{h}/dev"), &h);
+        assert!(matches!(r.preview, Preview::Folder { count: 1, .. }), "{:?}", r.preview);
+        assert!(r.modified_ms.is_some());
+        let _ = fs::remove_dir_all(&home);
+    }
+
     #[test]
     fn blocked_items_have_no_stat() {
         let home = tmp("home-nostat");
