@@ -11,6 +11,7 @@ const item = (name: string): ScanItem => ({
   modifiedMs: null,
   lastUsedMs: null,
   blocked: null,
+  shared: false,
 });
 
 describe("AI send targets (#75)", () => {
