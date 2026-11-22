@@ -29,7 +29,6 @@ base64 = "0.22"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
 url = "2"
-thiserror = "2"
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
