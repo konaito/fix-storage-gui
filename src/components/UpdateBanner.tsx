@@ -7,6 +7,7 @@ import {
   dismissUpdate,
   downloadFraction,
   installUpdate,
+  resumeUpdate,
   revealUpdate,
   useUpdateState,
 } from "../lib/updater";
@@ -22,6 +23,7 @@ const AUTO_CHECK_DELAY_MS = 3000;
  * - 起動時に静かに確認し、新しいバージョンがあればヘッダーのボタンで知らせる（押すとバージョンとリリースノートのカード）。
  * - アプリメニューの「アップデートを確認…」（Rust 側から `check-for-updates` イベント）でも確認する。
  * - スキャン・AI 判定・ゴミ箱移動の最中は自動で見つけた通知を出さず、インストールも始めない。
+ * - ダウンロード中に作業が始まったら、作業が終わるまで再起動を待つ（waiting）。再起動はユーザーが押して始める。
  */
 export function UpdateBanner() {
   const s = useUpdateState();
@@ -117,6 +119,7 @@ export function UpdateBanner() {
                 ? `${formatBytes(p.downloaded)} ダウンロード済み`
                 : "接続しています…"}
           </div>
+          <div className="muted small">ダウンロードとインストールが終わるまで、スキャン・AI 判定・ゴミ箱への移動は始められません。</div>
         </Card>
       );
     }
@@ -127,6 +130,24 @@ export function UpdateBanner() {
           <div className="update-title">v{p.info.version} をインストールしています…</div>
           <ProgressBar value={null} label="アップデートのインストール" />
           <div className="muted small">署名を確認してアプリを置き換えています。終わると自動で再起動します。</div>
+        </Card>
+      );
+
+    case "waiting":
+      return (
+        <Card>
+          <div className="update-title">v{p.info.version} の準備ができました</div>
+          <p className="update-busy small">
+            {s.blockedBy ? `${s.blockedBy}のため、終わるまで再起動を待っています。` : "作業が終わりました。再起動すると新しいバージョンになります。"}
+          </p>
+          <div className="update-actions">
+            <button type="button" onClick={dismissUpdate}>
+              あとで
+            </button>
+            <button type="button" className="primary" disabled={!!s.blockedBy} onClick={() => void resumeUpdate()}>
+              {p.installed ? "再起動" : "インストールして再起動"}
+            </button>
+          </div>
         </Card>
       );
 
@@ -183,10 +204,10 @@ export function UpdateCheckButton() {
       </button>
     );
   }
-  const busy = p.kind === "checking" || p.kind === "downloading" || p.kind === "installing" || p.kind === "restarting";
+  const busy = p.kind === "checking" || p.kind === "downloading" || p.kind === "installing" || p.kind === "waiting" || p.kind === "restarting";
   return (
     <button type="button" className="update-chip" disabled={busy} onClick={() => void checkForUpdate(true)}>
-      {p.kind === "checking" ? "確認中…" : "アップデートを確認"}
+      {p.kind === "checking" ? "確認中…" : p.kind === "waiting" ? "再起動を待っています" : "アップデートを確認"}
     </button>
   );
 }

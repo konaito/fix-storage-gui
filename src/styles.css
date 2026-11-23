@@ -186,6 +186,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
   .step-label-full { display: none; }
   .step-label-short { display: inline; }
 }
+/* Below its 600px flex basis the stepper is being squeezed by the brand and tools (about 490px at the
+   900px minimum window, #36). Even the short labels need about 588px, so keep only the current step's
+   label. The others stay in each button's aria-label and title. */
+@container stepper (max-width: 599px) {
+  .step:not(.current) .step-label { display: none; }
+  .step { flex: none; }
+}
 .step .opt { font-size: 10px; padding: 0 6px; border-radius: 999px; background: var(--bg-sunken); color: var(--text-3); }
 .step.current button { background: var(--accent-soft); color: var(--text); }
 .step.current .dot { background: var(--accent); border-color: var(--accent); color: #fff; }

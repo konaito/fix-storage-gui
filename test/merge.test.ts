@@ -23,6 +23,13 @@ describe("safety merge: hard block > fix-storage rules > AI", () => {
     const f = mergeVerdict({ blocked: null, category: "documents", cli: { verdict: "yours", reason: "" }, ai: ai("safe") });
     expect(f.verdict).toBe("caution");
   });
+  it("data the rules only call unused never becomes safe (#19)", () => {
+    // 800 days unopened: the rules say "unused" (caution); a file name must not talk the AI into "safe".
+    const f = mergeVerdict({ blocked: null, category: "documents", cli: { verdict: "unused", reason: "not opened in 2 years" }, ai: ai("safe") });
+    expect(f).toMatchObject({ verdict: "caution", source: "ai", locked: false });
+    expect(f.reason).toContain("「注意」に下げました");
+    expect(safePaths([{ path: "/Users/u/Documents/卒論_最終版.pdf", size: 1, final: f }])).toEqual([]);
+  });
   it("AI can make things stricter", () => {
     const f = mergeVerdict({ blocked: null, category: "caches", cli: { verdict: "junk", reason: "cache" }, ai: ai("keep") });
     expect(f.verdict).toBe("keep");

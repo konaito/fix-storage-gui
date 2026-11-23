@@ -194,10 +194,23 @@ pub async fn respond(
     model: &str,
     instructions: &str,
     input: &str,
+    on_delta: impl FnMut(usize),
+) -> Result<String, SiwcError> {
+    respond_to(http, RESPONSES_URL, token, model, instructions, input, on_delta).await
+}
+
+/// `respond` against any URL (tests point it at a local server).
+pub(crate) async fn respond_to(
+    http: &reqwest::Client,
+    url: &str,
+    token: &str,
+    model: &str,
+    instructions: &str,
+    input: &str,
     mut on_delta: impl FnMut(usize),
 ) -> Result<String, SiwcError> {
     let res = http
-        .post(RESPONSES_URL)
+        .post(url)
         .bearer_auth(token)
         .header("Accept", "text/event-stream")
         .json(&request_body(model, instructions, input))
