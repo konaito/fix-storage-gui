@@ -22,7 +22,7 @@ export function TopBar({ eyebrow, title, desc, meta, busy, children }: TopBarPro
     <div className="topbar" role="region" aria-label="この画面の操作">
       <div className="topbar-text">
         {eyebrow && <div className="eyebrow">{eyebrow}</div>}
-        <h2 className="topbar-title">
+        <h2 className="topbar-title" tabIndex={-1}>
           {busy && <Spinner size={18} />}
           <span>{title}</span>
         </h2>

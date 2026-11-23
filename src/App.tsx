@@ -355,6 +355,20 @@ export default function App() {
     });
   }, [view]);
 
+  // Each step's page is re-created (key={flow.step}), so the focused control disappears and focus falls back to
+  // <body>. Move it to the new step's title in the top bar instead (#43). Not on the first render, and not away
+  // from the sidebar (while it is still shown on the new step) or a dialog the user is working in.
+  // Starting or ending work within a step (moving to the Trash, AI judging) swaps the bar too, so it counts (#78).
+  const stepView = `${flow.step}:${flow.busy ?? ""}`;
+  const shownStep = useRef(stepView);
+  useEffect(() => {
+    if (shownStep.current === stepView) return;
+    shownStep.current = stepView;
+    const active = document.activeElement;
+    if (active && active !== document.body && active.closest(".sidebar:not([hidden]), [role=dialog]")) return;
+    barSlot?.querySelector<HTMLElement>(".topbar-title")?.focus();
+  }, [stepView, barSlot]);
+
   const chosen = view.filter((r) => selected.has(r.path) && selectable(r.final));
   // flow.busy is still null for a second click in the same tick, so a ref stops the move from running twice (#38).
   const trashing = useRef(false);
