@@ -39,6 +39,8 @@ export default function App() {
   const { status, signingIn, refreshStatus, reportApp } = gate;
   const [models, setModels] = useState<Model[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  // Loading the model list failed or it came back empty: no AI run can start, so the list must not wait for one (#26).
+  const [modelsFailed, setModelsFailed] = useState(false);
   const [model, setModel] = useState("");
 
   const [flow, dispatch] = useReducer(flowReducer, initialFlow);
@@ -75,7 +77,8 @@ export default function App() {
   const [aiDialog, setAiDialog] = useState(false);
   const [aiRun, setAiRun] = useState<AiRun | null>(null);
   const [aiOutcome, setAiOutcome] = useState<AiOutcome | null>(null);
-  const aiStop = useRef(false);
+  // Stopping the AI run aborts this; runBatches returns without waiting for requests in flight (#21).
+  const aiAbort = useRef<AbortController | null>(null);
   // Signed-in users with plan usage: open the AI send dialog once after each scan (#12). Cancelling does not reopen it.
   const [autoAi, setAutoAi] = useState(false);
 
@@ -92,8 +95,10 @@ export default function App() {
   const signedIn = !!active?.signedIn;
   const planReady = gate.planEnabled && signedIn && !!active?.planEnabled;
 
-  // What every step shows and acts on: with plan usage, rows the AI has not judged are "未判定" and can't be selected (#12).
-  const view = useMemo(() => rows.map((r) => forDisplay(r, planReady)), [rows, planReady]);
+  // What every step shows and acts on: with plan usage, rows the AI has not judged are "未判定" and can't be selected (#12),
+  // unless this list fell back to the rules' verdict (no models, the AI ended in an error, or the user skipped it: #26).
+  const requireAi = planReady && !flow.ruleOnly;
+  const view = useMemo(() => rows.map((r) => forDisplay(r, requireAi)), [rows, requireAi]);
   // AI review targets: everything not locked by the hard block list or fix-storage's rules.
   const aiTargets = useMemo(() => view.filter((r) => !r.final.locked), [view]);
   // What the next run sends (and the send dialog shows): only the rows the AI has not judged yet (#75).
@@ -110,9 +115,11 @@ export default function App() {
     try {
       const list = await api.siwcModels();
       setModels(list);
+      setModelsFailed(list.length === 0);
       setModel((cur) => (list.some((m) => m.slug === cur) ? cur : (list[0]?.slug ?? "")));
     } catch (e) {
       setModels([]);
+      setModelsFailed(true);
       handleAiError(e);
     } finally {
       setModelsLoading(false);
@@ -135,8 +142,13 @@ export default function App() {
   // Refresh the model list whenever the active account changes.
   useEffect(() => {
     if (planReady) void loadModels();
-    else setModels([]);
+    else {
+      setModels([]);
+      setModelsFailed(false);
+    }
   }, [planReady, status?.active, loadModels]);
+
+  useEffect(() => dispatch({ type: "models", available: !modelsFailed }), [modelsFailed]);
 
   function handleAiError(e: unknown) {
     if (isSiwcError(e)) {
@@ -229,8 +241,10 @@ export default function App() {
     if (!env || !model || flow.busy || !planReady || !clientId) return;
     const maskOpts = { enabled: mask, home: env.home, user: env.user };
     const indexed = aiQueue.map((r, i) => ({ id: `i${i}`, row: r }));
+    if (indexed.length === 0) return;
     const batches = chunk(indexed, BATCH);
-    aiStop.current = false;
+    const abort = new AbortController();
+    aiAbort.current = abort;
     setAiOutcome(null);
     setAiRun({
       done: 0,
@@ -246,6 +260,8 @@ export default function App() {
     dispatch({ type: "aiStart" });
     const results = new Map<string, AiJudgement>();
     let missing = 0;
+    let failed = 0;
+    let failedReason: string | null = null;
     let stopped = false;
     let err: string | null = null;
     try {
@@ -253,10 +269,10 @@ export default function App() {
         batches,
         concurrency: DEFAULT_CONCURRENCY,
         itemCount: (batch) => batch.length,
-        shouldStop: () => aiStop.current,
-        send: (batch, _index, onChars) => {
+        signal: abort.signal,
+        send: (batch, _index, onChars, signal) => {
           const payload = batch.map(({ id, row }) => toPayload(id, row, maskOpts));
-          return PROVIDER.judge(payload, { model, clientId, onProgress: onChars });
+          return PROVIDER.judge(payload, { model, clientId, onProgress: onChars, signal });
         },
         onBatchComplete: (_index, judged, batch) => {
           const byId = new Map(judged.map((j) => [j.id, j]));
@@ -283,6 +299,9 @@ export default function App() {
         },
       });
       stopped = outcome.stopped;
+      // Batches that failed twice stay unjudged; the rest of the run went on (#27).
+      failed = outcome.failed.reduce((n, f) => n + batches[f.index].length, 0);
+      failedReason = outcome.failed.length > 0 ? describeError(outcome.failed[outcome.failed.length - 1].error) : null;
       if (outcome.error) {
         handleAiError(outcome.error);
         err = describeError(outcome.error);
@@ -291,19 +310,27 @@ export default function App() {
       handleAiError(e);
       err = describeError(e);
     } finally {
+      if (aiAbort.current === abort) aiAbort.current = null;
       setAiRun(null);
-      setAiOutcome({ judged: results.size, missing, stopped, error: err });
-      dispatch({ type: "aiEnd", ok: !err && results.size > 0 });
+      setAiOutcome({ judged: results.size, missing, failed, failedReason, stopped, error: err });
+      // An error (usage limit, sign-in, every batch failed) opens the list with the rules' verdict for the rest (#26).
+      dispatch({ type: "aiEnd", ok: !err && results.size > 0, error: !!err || (!stopped && results.size === 0 && failed > 0) });
     }
   }
 
   // Open the send dialog by itself once the AI step is up and a model is ready.
   useEffect(() => {
-    if (autoAi && flow.step === "ai" && !flow.busy && planReady && !!model && !!env && aiTargets.length > 0) {
+    if (autoAi && flow.step === "ai" && !flow.busy && !flow.ruleOnly && planReady && !!model && !!env && aiTargets.length > 0) {
       setAutoAi(false);
       setAiDialog(true);
     }
-  }, [autoAi, flow.step, flow.busy, planReady, model, env, aiTargets.length]);
+  }, [autoAi, flow.step, flow.busy, flow.ruleOnly, planReady, model, env, aiTargets.length]);
+
+  /** "AI なしで一覧へ": this list only shows the rules' verdict for items the AI has not judged (#26). */
+  function skipAi() {
+    setAutoAi(false);
+    dispatch({ type: "skipAi" });
+  }
 
   // Drop selections that new verdicts (or a rescan) no longer allow.
   useEffect(() => {
@@ -403,6 +430,7 @@ export default function App() {
           partial={partial}
           aiDone={flow.aiDone}
           aiFirst={flow.aiFirst}
+          ruleOnly={flow.ruleOnly}
           selected={selected}
           onToggle={toggle}
           onSelectPaths={selectPaths}
@@ -432,6 +460,8 @@ export default function App() {
       page = (
         <AiStep
           aiFirst={flow.aiFirst}
+          ruleOnly={flow.ruleOnly}
+          onSkipAi={skipAi}
           canGoReview={canGo(flow, "review", chosen.length)}
           onBack={() => dispatch({ type: "back", selected: chosen.length })}
           planReady={planReady}
@@ -448,7 +478,7 @@ export default function App() {
           selectedCount={chosen.length}
           onOpenSend={() => setAiDialog(true)}
           onStop={() => {
-            aiStop.current = true;
+            aiAbort.current?.abort();
             setAiRun((s) => (s ? { ...s, stopRequested: true } : s));
           }}
           onGoReview={() => go("review")}

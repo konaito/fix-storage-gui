@@ -261,13 +261,20 @@ async fn siwc_respond(
     instructions: String,
     input: String,
 ) -> Result<String, SiwcError> {
+    let progress_id = request_id.clone();
     let emitter = app.clone();
     let on_delta = move |chars: usize| {
-        let _ = emitter.emit("ai-progress", AiProgress { request_id: request_id.clone(), chars });
+        let _ = emitter.emit("ai-progress", AiProgress { request_id: progress_id.clone(), chars });
     };
-    let res = state.siwc.respond(&client_id, &model, &instructions, &input, on_delta).await;
+    let res = state.siwc.respond(&request_id, &client_id, &model, &instructions, &input, on_delta).await;
     notify_if_signed_out(&app, &res);
     res
+}
+
+/// Drops the stream of a `siwc_respond` call when the user stops the AI run (#21).
+#[tauri::command]
+fn siwc_cancel(state: State<'_, AppState>, request_id: String) {
+    state.siwc.cancel_respond(&request_id);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -316,7 +323,8 @@ pub fn run() {
             siwc_ack_welcome,
             siwc_sign_out,
             siwc_models,
-            siwc_respond
+            siwc_respond,
+            siwc_cancel
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

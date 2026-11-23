@@ -27,6 +27,8 @@ export function describeError(e: unknown): string {
     network: "ネットワークに接続できません。",
     timeout: "サインインが時間内に完了しませんでした。",
     cancelled: "サインインを中止しました。",
+    ai_timeout: "AI の応答が時間内に終わりませんでした。",
+    ai_cancelled: "AI 判定を中止しました。",
   };
   const parts = [base[e.kind] ?? e.message];
   if (base[e.kind] && e.message) parts.push(`（${e.message}）`);

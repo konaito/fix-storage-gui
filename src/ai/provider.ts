@@ -32,6 +32,8 @@ export interface JudgeOptions {
   clientId: string;
   /** Called with the number of characters received so far. */
   onProgress?: (chars: number) => void;
+  /** Aborting it cancels the request (the run was stopped). */
+  signal?: AbortSignal;
 }
 
 export interface JudgeProvider {
