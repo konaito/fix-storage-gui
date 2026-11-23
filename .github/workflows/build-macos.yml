@@ -1,11 +1,17 @@
 name: Build macOS
 
-# main への push ごとに、テストと universal の .app / .dmg ビルドを行い artifact に保存する（署名なし・ad-hoc 署名）。
+# main への push、PR、手動実行のたびに、テストと universal の .app / .dmg ビルドを行い artifact に保存する（署名なし・ad-hoc 署名）。
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+
+# 同じ PR に続けて push したら古い run を止める。main への push では走っている run を止めない。
+# ただし同じ group で待っている run は、後から来た run に置き換わる。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -16,16 +22,23 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
+      # 版番号（package.json、package-lock.json、tauri.conf.json、Cargo.toml、Cargo.lock）がそろっているか。依存が要らないので先に走らせる。
+      - name: Check version is the same in all files
+        run: node scripts/check-version.mjs
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
+          components: clippy, rustfmt
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+      # 整形のずれを入れない。直すときは src-tauri で cargo fmt を実行する。
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - name: Build universal .app and .dmg (ad-hoc signed, not notarized)
         env:
           # https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing

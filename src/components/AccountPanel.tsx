@@ -7,6 +7,8 @@ interface Props {
   model: string;
   onModel: (slug: string) => void;
   signingIn: boolean;
+  /** While a scan, AI run or trash move is running, account changes are off (#28). Says what is running. */
+  locked?: string | null;
   onSignIn: (clientId: string | null, promptConsent: boolean) => void;
   onCancelSignIn: () => void;
   onSwitch: (clientId: string) => void;
@@ -19,6 +21,8 @@ interface Props {
 export function AccountPanel(p: Props) {
   const active: AccountView | undefined = p.status?.accounts.find((a) => a.clientId === p.status?.active);
   const saved = p.status?.accounts ?? [];
+  const locked = !!p.locked;
+  const lockedNote = locked && <p className="muted small">{p.locked}は、アカウントの切り替え・追加・サインアウトはできません。</p>;
 
   if (p.signingIn) {
     return (
@@ -46,6 +50,7 @@ export function AccountPanel(p: Props) {
             <select
               aria-label="保存済みのアカウント"
               defaultValue=""
+              disabled={locked}
               onChange={(e) => e.target.value && p.onSignIn(e.target.value, false)}
             >
               <option value="">保存済みのアカウントで続ける…</option>
@@ -56,10 +61,11 @@ export function AccountPanel(p: Props) {
               ))}
             </select>
           )}
-          <button className="chatgpt-button" onClick={() => p.onSignIn(null, false)}>
+          <button className="chatgpt-button" disabled={locked} onClick={() => p.onSignIn(null, false)}>
             Continue with ChatGPT
           </button>
         </div>
+        {lockedNote}
       </div>
     );
   }
@@ -73,7 +79,7 @@ export function AccountPanel(p: Props) {
         </div>
         <div className="row">
           {saved.length > 1 && (
-            <select aria-label="アカウントを切り替え" value={active.clientId} onChange={(e) => p.onSwitch(e.target.value)}>
+            <select aria-label="アカウントを切り替え" value={active.clientId} disabled={locked} onChange={(e) => p.onSwitch(e.target.value)}>
               {saved.map((a) => (
                 <option key={a.clientId} value={a.clientId}>
                   {a.label}
@@ -81,10 +87,15 @@ export function AccountPanel(p: Props) {
               ))}
             </select>
           )}
-          <button onClick={() => p.onSignIn(null, false)}>別のアカウントを追加</button>
-          <button onClick={p.onSignOut}>サインアウト</button>
+          <button disabled={locked} onClick={() => p.onSignIn(null, false)}>
+            別のアカウントを追加
+          </button>
+          <button disabled={locked} onClick={p.onSignOut}>
+            サインアウト
+          </button>
         </div>
       </div>
+      {lockedNote}
       {active.planEnabled ? (
         <div className="row model-row">
           <label>

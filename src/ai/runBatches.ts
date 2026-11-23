@@ -9,6 +9,7 @@
  * conservative choice we made; it is not a documented cap.
  */
 import { isSiwcError } from "../lib/api";
+import { JudgementParseError } from "./parse";
 
 export const DEFAULT_CONCURRENCY = 3;
 
@@ -18,6 +19,9 @@ const BACKOFF_CAP_MS = 8000;
 
 /** Extra retries of a batch after concurrency has already been reduced to 1. */
 export const RATE_LIMIT_RETRIES_AT_ONE = 2;
+
+/** Extra attempts for a batch whose reply was cut off or unreadable (#27). */
+export const BATCH_RETRIES = 1;
 
 export function rateLimitBackoffMs(attempt: number): number {
   const n = Math.max(1, attempt);
@@ -38,32 +42,52 @@ export interface BatchProgress {
 export interface RunBatchesOptions<T, R> {
   batches: T[];
   itemCount: (batch: T) => number;
-  send: (batch: T, index: number, onChars: (chars: number) => void) => Promise<R>;
-  /** Called as soon as a batch succeeds, regardless of launch order. */
+  /** `signal` is the run's stop signal; a sender can use it to cancel its request. */
+  send: (batch: T, index: number, onChars: (chars: number) => void, signal: AbortSignal) => Promise<R>;
+  /** Called as soon as a batch succeeds, regardless of launch order. Never called after runBatches has returned. */
   onBatchComplete: (index: number, result: R, batch: T) => void;
   onProgress: (progress: BatchProgress) => void;
-  shouldStop: () => boolean;
+  /**
+   * Stop. runBatches returns right away without waiting for batches in flight (#21);
+   * their late answers are dropped.
+   */
+  signal?: AbortSignal;
   concurrency?: number;
   sleep?: (ms: number) => Promise<void>;
   isRateLimitError?: (error: unknown) => boolean;
   rateLimitRetriesAtOne?: number;
 }
 
+export interface FailedBatch {
+  index: number;
+  error: unknown;
+}
+
 export interface RunBatchesResult {
   stopped: boolean;
+  /** An error that stopped the whole run (no new batches were sent after it). */
   error: unknown | null;
+  /** Batches that still failed after their retry. The others kept going; these items stay unjudged. */
+  failed: FailedBatch[];
   batchesCompleted: number;
   doneItems: number;
 }
 
-/** Rate-limit / 429 / ChatGPT-plan usage-limit errors that trigger backoff. */
+/** The ChatGPT plan's usage limit. Waiting a few seconds does not help, so the run stops at once (#27). */
+export function isUsageLimitError(error: unknown): boolean {
+  return isSiwcError(error) && (error.kind === "usage_limit" || error.code === "subscription_sharing_usage_limit_exceeded");
+}
+
+/** Plain 429 rate limiting: back off and resend. The usage limit also comes as a 429 but is not one of these. */
 export function isRateLimitError(error: unknown): boolean {
-  if (isSiwcError(error)) {
-    if (error.kind === "rate_limited" || error.kind === "usage_limit") return true;
-    if (error.status === 429) return true;
-    if (error.code === "subscription_sharing_usage_limit_exceeded") return true;
-  }
-  return false;
+  if (!isSiwcError(error) || isUsageLimitError(error)) return false;
+  return error.kind === "rate_limited" || error.status === 429;
+}
+
+/** A reply that was cut off, timed out or could not be read: worth one more try of the same batch. */
+export function isRetryableBatchError(error: unknown): boolean {
+  if (error instanceof JudgementParseError) return true;
+  return isSiwcError(error) && (error.kind === "interrupted" || error.kind === "incomplete" || error.kind === "ai_timeout");
 }
 
 export async function runBatches<T, R>(opts: RunBatchesOptions<T, R>): Promise<RunBatchesResult> {
@@ -74,10 +98,15 @@ export async function runBatches<T, R>(opts: RunBatchesOptions<T, R>): Promise<R
   const totalBatches = batches.length;
   const totalItems = batches.reduce((n, b) => n + opts.itemCount(b), 0);
 
+  const signal = opts.signal ?? new AbortController().signal;
+
   let concurrency = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
   let stopLaunching = false;
   let stopped = false;
+  /** Set when runBatches returns; anything that settles later is ignored. */
+  let finished = false;
   let error: unknown | null = null;
+  const failed: FailedBatch[] = [];
   let doneItems = 0;
   let batchesCompleted = 0;
   let nextAttempt = 1;
@@ -85,7 +114,12 @@ export async function runBatches<T, R>(opts: RunBatchesOptions<T, R>): Promise<R
   const queue: number[] = batches.map((_, i) => i);
   const inFlightChars = new Map<number, number>();
   const retriesAtFloor = new Map<number, number>();
+  const retried = new Map<number, number>();
   const running = new Set<Promise<void>>();
+  const aborted = new Promise<void>((resolve) => {
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", () => resolve(), { once: true });
+  });
 
   const progress = (): BatchProgress => {
     let streamedChars = 0;
@@ -101,31 +135,51 @@ export async function runBatches<T, R>(opts: RunBatchesOptions<T, R>): Promise<R
     };
   };
 
-  const emit = () => opts.onProgress(progress());
+  const emit = () => {
+    if (!finished) opts.onProgress(progress());
+  };
   emit();
 
-  const canLaunch = () =>
-    !stopLaunching && !opts.shouldStop() && inFlightChars.size < concurrency && queue.length > 0;
+  const canLaunch = () => !stopLaunching && !signal.aborted && inFlightChars.size < concurrency && queue.length > 0;
 
   const launch = async (index: number): Promise<void> => {
     const batch = batches[index];
     inFlightChars.set(index, 0);
     emit();
     try {
-      const result = await opts.send(batch, index, (chars) => {
-        if (inFlightChars.has(index)) {
-          inFlightChars.set(index, chars);
-          emit();
-        }
-      });
+      const result = await opts.send(
+        batch,
+        index,
+        (chars) => {
+          if (inFlightChars.has(index)) {
+            inFlightChars.set(index, chars);
+            emit();
+          }
+        },
+        signal,
+      );
+      if (finished) return;
       inFlightChars.delete(index);
       doneItems += opts.itemCount(batch);
       batchesCompleted += 1;
       opts.onBatchComplete(index, result, batch);
       emit();
     } catch (e) {
+      // After a stop, the failure is usually our own cancel: neither a retry nor a failed batch.
+      if (finished || signal.aborted) return;
       inFlightChars.delete(index);
       emit();
+      if (isRetryableBatchError(e)) {
+        const n = retried.get(index) ?? 0;
+        if (n < BATCH_RETRIES) {
+          retried.set(index, n + 1);
+          queue.unshift(index);
+        } else {
+          failed.push({ index, error: e });
+        }
+        emit();
+        return;
+      }
       if (isRl(e)) {
         const prev = concurrency;
         concurrency = Math.max(1, concurrency - 1);
@@ -144,13 +198,7 @@ export async function runBatches<T, R>(opts: RunBatchesOptions<T, R>): Promise<R
         const delay = rateLimitBackoffMs(nextAttempt);
         nextAttempt += 1;
         await sleep(delay);
-        if (opts.shouldStop()) {
-          stopped = true;
-          stopLaunching = true;
-          emit();
-          return;
-        }
-        if (error) return;
+        if (finished || signal.aborted || error) return;
         queue.unshift(index);
         emit();
         return;
@@ -162,9 +210,10 @@ export async function runBatches<T, R>(opts: RunBatchesOptions<T, R>): Promise<R
   };
 
   while (true) {
-    if (opts.shouldStop()) {
+    if (signal.aborted) {
+      // Do not wait for batches in flight: a stalled stream must not keep the app busy (#21).
       stopped = true;
-      stopLaunching = true;
+      break;
     }
     while (canLaunch()) {
       const index = queue.shift()!;
@@ -175,8 +224,9 @@ export async function runBatches<T, R>(opts: RunBatchesOptions<T, R>): Promise<R
       running.add(task);
     }
     if (running.size === 0) break;
-    await Promise.race(running);
+    await Promise.race([...running, aborted]);
   }
 
-  return { stopped, error, batchesCompleted, doneItems };
+  finished = true;
+  return { stopped, error, failed, batchesCompleted, doneItems };
 }
