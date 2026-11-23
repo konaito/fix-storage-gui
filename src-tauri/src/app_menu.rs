@@ -11,9 +11,20 @@ pub const CHECK_UPDATES_EVENT: &str = "check-for-updates";
 pub fn install<R: Runtime>(app: &App<R>) -> tauri::Result<()> {
     let handle = app.handle();
     let menu = Menu::default(handle)?;
-    let item = MenuItem::with_id(handle, CHECK_UPDATES_ID, "アップデートを確認…", true, None::<&str>)?;
+    let item = MenuItem::with_id(
+        handle,
+        CHECK_UPDATES_ID,
+        "アップデートを確認…",
+        true,
+        None::<&str>,
+    )?;
     // 先頭のサブメニューが macOS のアプリメニュー。0 番目は「〜について」。
-    if let Some(app_menu) = menu.items()?.into_iter().next().and_then(|k| k.as_submenu().cloned()) {
+    if let Some(app_menu) = menu
+        .items()?
+        .into_iter()
+        .next()
+        .and_then(|k| k.as_submenu().cloned())
+    {
         app_menu.insert(&item, 1)?;
     } else {
         menu.append(&item)?;

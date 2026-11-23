@@ -26,7 +26,11 @@ pub fn parse_models(v: &Value) -> Vec<Model> {
             .filter(|m| m.get("visibility").and_then(|x| x.as_str()) == Some("list"))
             .filter_map(|m| {
                 let slug = m.get("slug").and_then(|s| s.as_str())?.to_string();
-                let display_name = m.get("display_name").and_then(|s| s.as_str()).unwrap_or(&slug).to_string();
+                let display_name = m
+                    .get("display_name")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or(&slug)
+                    .to_string();
                 Some(Model { slug, display_name })
             })
             .collect();
@@ -36,7 +40,10 @@ pub fn parse_models(v: &Value) -> Vec<Model> {
         .map(|arr| {
             arr.iter()
                 .filter_map(|m| m.get("id").and_then(|s| s.as_str()))
-                .map(|id| Model { slug: id.to_string(), display_name: id.to_string() })
+                .map(|id| Model {
+                    slug: id.to_string(),
+                    display_name: id.to_string(),
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -47,8 +54,14 @@ pub fn parse_models(v: &Value) -> Vec<Model> {
 pub fn http_error(status: u16, request_id: Option<String>, body: &str) -> SiwcError {
     let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     let err = v.get("error");
-    let code = err.and_then(|e| e.get("code")).and_then(|c| c.as_str()).map(String::from);
-    let param = err.and_then(|e| e.get("param")).and_then(|c| c.as_str()).map(String::from);
+    let code = err
+        .and_then(|e| e.get("code"))
+        .and_then(|c| c.as_str())
+        .map(String::from);
+    let param = err
+        .and_then(|e| e.get("param"))
+        .and_then(|c| c.as_str())
+        .map(String::from);
     let message = err
         .and_then(|e| e.get("message"))
         .and_then(|m| m.as_str())
@@ -61,19 +74,36 @@ pub fn http_error(status: u16, request_id: Option<String>, body: &str) -> SiwcEr
         Some(c) => kind_for_code(c),
         None => kind_for_status(status),
     };
-    SiwcError { kind: kind.into(), code, param, status: Some(status), request_id, message }
+    SiwcError {
+        kind: kind.into(),
+        code,
+        param,
+        status: Some(status),
+        request_id,
+        message,
+    }
 }
 
 #[allow(clippy::result_large_err)]
 pub async fn list_models(http: &reqwest::Client, token: &str) -> Result<Vec<Model>, SiwcError> {
-    let res = http.get(MODELS_URL).bearer_auth(token).send().await.map_err(SiwcError::network)?;
+    let res = http
+        .get(MODELS_URL)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(SiwcError::network)?;
     let status = res.status().as_u16();
-    let rid = res.headers().get("x-request-id").and_then(|h| h.to_str().ok()).map(String::from);
+    let rid = res
+        .headers()
+        .get("x-request-id")
+        .and_then(|h| h.to_str().ok())
+        .map(String::from);
     let body = res.text().await.map_err(SiwcError::network)?;
     if !(200..300).contains(&status) {
         return Err(http_error(status, rid, &body));
     }
-    let v: Value = serde_json::from_str(&body).map_err(|_| SiwcError::new("api_error", "モデル一覧を読めませんでした"))?;
+    let v: Value = serde_json::from_str(&body)
+        .map_err(|_| SiwcError::new("api_error", "モデル一覧を読めませんでした"))?;
     Ok(parse_models(&v))
 }
 
@@ -105,7 +135,11 @@ impl StreamState {
         while let Some(idx) = self.buf.find("\n\n") {
             let event: String = self.buf[..idx].to_string();
             self.buf.drain(..idx + 2);
-            let data: Vec<&str> = event.lines().filter_map(|l| l.strip_prefix("data:")).map(|l| l.trim_start()).collect();
+            let data: Vec<&str> = event
+                .lines()
+                .filter_map(|l| l.strip_prefix("data:"))
+                .map(|l| l.trim_start())
+                .collect();
             if data.is_empty() {
                 continue;
             }
@@ -136,8 +170,15 @@ impl StreamState {
             }
             "response.failed" => {
                 let err = v.get("response").and_then(|r| r.get("error"));
-                let code = err.and_then(|e| e.get("code")).and_then(|c| c.as_str()).map(String::from);
-                let msg = err.and_then(|e| e.get("message")).and_then(|m| m.as_str()).unwrap_or("").to_string();
+                let code = err
+                    .and_then(|e| e.get("code"))
+                    .and_then(|c| c.as_str())
+                    .map(String::from);
+                let msg = err
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let kind = code.as_deref().map(kind_for_code).unwrap_or("api_error");
                 self.error = Some(SiwcError::new(kind, msg).with_code(code));
             }
@@ -147,7 +188,10 @@ impl StreamState {
                     .and_then(|r| r.as_str())
                     .unwrap_or("unknown")
                     .to_string();
-                self.error = Some(SiwcError::new("incomplete", format!("応答が途中で終わりました ({reason})")).with_code(Some(reason)));
+                self.error = Some(
+                    SiwcError::new("incomplete", format!("応答が途中で終わりました ({reason})"))
+                        .with_code(Some(reason)),
+                );
             }
             "error" => {
                 let code = v
@@ -198,7 +242,16 @@ pub async fn respond(
     input: &str,
     on_delta: impl FnMut(usize),
 ) -> Result<String, SiwcError> {
-    respond_to(http, RESPONSES_URL, token, model, instructions, input, on_delta).await
+    respond_to(
+        http,
+        RESPONSES_URL,
+        token,
+        model,
+        instructions,
+        input,
+        on_delta,
+    )
+    .await
 }
 
 /// `respond` against any URL (tests point it at a local server).
@@ -220,7 +273,11 @@ pub(crate) async fn respond_to(
         .await
         .map_err(SiwcError::network)?;
     let status = res.status().as_u16();
-    let rid = res.headers().get("x-request-id").and_then(|h| h.to_str().ok()).map(String::from);
+    let rid = res
+        .headers()
+        .get("x-request-id")
+        .and_then(|h| h.to_str().ok())
+        .map(String::from);
     if !(200..300).contains(&status) {
         let body = res.text().await.unwrap_or_default();
         return Err(http_error(status, rid, &body));
@@ -260,7 +317,10 @@ pub(crate) async fn respond_to(
         return Err(e);
     }
     if !state.completed {
-        let mut e = SiwcError::new("interrupted", "response.completed を受け取る前にストリームが終わりました");
+        let mut e = SiwcError::new(
+            "interrupted",
+            "response.completed を受け取る前にストリームが終わりました",
+        );
         e.request_id = rid;
         return Err(e);
     }
@@ -278,7 +338,10 @@ mod tests {
             {"slug":"hidden","display_name":"H","visibility":"hide"},
             {"slug":"a","display_name":"A","visibility":"list"}]});
         let m = parse_models(&v);
-        assert_eq!(m.iter().map(|x| x.slug.as_str()).collect::<Vec<_>>(), vec!["b", "a"]);
+        assert_eq!(
+            m.iter().map(|x| x.slug.as_str()).collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
         let v2 = json!({"data":[{"id":"x"}]});
         assert_eq!(parse_models(&v2)[0].slug, "x");
     }
@@ -288,7 +351,14 @@ mod tests {
         let b = request_body("m", "i", "x");
         assert_eq!(b["store"], json!(false));
         assert_eq!(b["stream"], json!(true));
-        for f in ["temperature", "max_output_tokens", "metadata", "previous_response_id", "user", "top_p"] {
+        for f in [
+            "temperature",
+            "max_output_tokens",
+            "metadata",
+            "previous_response_id",
+            "user",
+            "top_p",
+        ] {
             assert!(b.get(f).is_none());
         }
     }
@@ -315,12 +385,20 @@ mod tests {
 
     #[test]
     fn admission_detail_body() {
-        let e = http_error(503, Some("req_1".into()), r#"{"detail":"Direct routing unavailable"}"#);
+        let e = http_error(
+            503,
+            Some("req_1".into()),
+            r#"{"detail":"Direct routing unavailable"}"#,
+        );
         assert_eq!(e.kind, "unavailable");
         assert_eq!(e.code, None);
         assert_eq!(e.message, "Direct routing unavailable");
         assert_eq!(e.request_id.as_deref(), Some("req_1"));
-        let e2 = http_error(400, None, r#"{"error":{"code":"subscription_sharing_unsupported_capability","param":"tools"}}"#);
+        let e2 = http_error(
+            400,
+            None,
+            r#"{"error":{"code":"subscription_sharing_unsupported_capability","param":"tools"}}"#,
+        );
         assert_eq!(e2.kind, "unsupported_capability");
         assert_eq!(e2.param.as_deref(), Some("tools"));
     }

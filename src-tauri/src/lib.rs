@@ -34,14 +34,24 @@ fn home() -> Result<String, String> {
             return Ok(h);
         }
     }
-    passwd_home().filter(|h| safety::home_ok(h)).ok_or_else(|| "ホームフォルダが分からないため、スキャンも移動もしません".into())
+    passwd_home()
+        .filter(|h| safety::home_ok(h))
+        .ok_or_else(|| "ホームフォルダが分からないため、スキャンも移動もしません".into())
 }
 
 fn passwd_home() -> Option<String> {
     let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
     let mut buf = vec![0 as libc::c_char; 4096];
     let mut out: *mut libc::passwd = std::ptr::null_mut();
-    let rc = unsafe { libc::getpwuid_r(libc::getuid(), &mut pwd, buf.as_mut_ptr(), buf.len(), &mut out) };
+    let rc = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            &mut pwd,
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut out,
+        )
+    };
     if rc != 0 || out.is_null() || pwd.pw_dir.is_null() {
         return None;
     }
@@ -61,8 +71,18 @@ struct EnvInfo {
 #[tauri::command]
 fn env_info() -> EnvInfo {
     let home = home().unwrap_or_default();
-    let user = home.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_string();
-    EnvInfo { home, user, os: std::env::consts::OS, version: env!("CARGO_PKG_VERSION") }
+    let user = home
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    EnvInfo {
+        home,
+        user,
+        os: std::env::consts::OS,
+        version: env!("CARGO_PKG_VERSION"),
+    }
 }
 
 /// A scan progress event tagged with the scan it belongs to, so the window can drop
@@ -92,7 +112,12 @@ async fn scan(
         Some(f) => Some(safety::normalize(&f).ok_or("正しいフォルダではありません")?),
         None => None,
     };
-    let opts = scan::ScanOptions { home: home()?, folder, min_size, limit: 400 };
+    let opts = scan::ScanOptions {
+        home: home()?,
+        folder,
+        min_size,
+        limit: 400,
+    };
     let emitter = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         scan::run_scan(opts, cancel, move |progress| {
@@ -105,11 +130,16 @@ async fn scan(
 
 /// Local-only preview for the detail panel (never sent to the AI). Supersedes any earlier request.
 #[tauri::command]
-async fn preview_item(state: State<'_, AppState>, path: String) -> Result<preview::PreviewResult, String> {
+async fn preview_item(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<preview::PreviewResult, String> {
     let gen = state.preview_gen.fetch_add(1, Ordering::SeqCst) + 1;
     let current = state.preview_gen.clone();
     let h = home()?;
-    tauri::async_runtime::spawn_blocking(move || preview::preview(&path, &h, gen, current)).await.map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || preview::preview(&path, &h, gen, current))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -125,13 +155,30 @@ fn cancel_scan(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-async fn move_to_trash(app: tauri::AppHandle, paths: Vec<String>) -> Result<Vec<trash::TrashOutcome>, String> {
+async fn move_to_trash(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+) -> Result<Vec<trash::TrashOutcome>, String> {
     let h = home()?;
     tauri::async_runtime::spawn_blocking(move || {
         let out = trash::move_to_trash(&paths, &h, |done, total, current| {
-            let _ = app.emit("trash-progress", TrashProgress { done, total, current: current.to_string() });
+            let _ = app.emit(
+                "trash-progress",
+                TrashProgress {
+                    done,
+                    total,
+                    current: current.to_string(),
+                },
+            );
         });
-        let _ = app.emit("trash-progress", TrashProgress { done: paths.len(), total: paths.len(), current: String::new() });
+        let _ = app.emit(
+            "trash-progress",
+            TrashProgress {
+                done: paths.len(),
+                total: paths.len(),
+                current: String::new(),
+            },
+        );
         out
     })
     .await
@@ -166,7 +213,9 @@ fn reveal_in_finder(path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn open_usage(app: tauri::AppHandle) -> Result<(), String> {
-    app.opener().open_url(siwc::USAGE_URL, None::<&str>).map_err(|e| e.to_string())
+    app.opener()
+        .open_url(siwc::USAGE_URL, None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 /// Opens an official Sign in with ChatGPT documentation page in the system browser.
@@ -175,12 +224,20 @@ fn open_siwc_doc(app: tauri::AppHandle, url: String) -> Result<(), String> {
     if !docs::is_official_siwc_doc(&url) {
         return Err("公式ドキュメント以外の URL は開けません".into());
     }
-    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 /// Tells the login gate that the signed-in account may have changed.
 fn notify_siwc_changed(app: &tauri::AppHandle, reason: &'static str, remote_revoked: Option<bool>) {
-    let _ = app.emit("siwc-changed", SiwcChanged { reason, remote_revoked });
+    let _ = app.emit(
+        "siwc-changed",
+        SiwcChanged {
+            reason,
+            remote_revoked,
+        },
+    );
 }
 
 #[derive(Clone, Serialize)]
@@ -198,11 +255,21 @@ fn siwc_status(state: State<'_, AppState>) -> Result<siwc::Status, SiwcError> {
 
 #[tauri::command]
 #[allow(clippy::result_large_err)]
-async fn siwc_sign_in(app: tauri::AppHandle, state: State<'_, AppState>, client_id: Option<String>, prompt_consent: bool) -> Result<siwc::AccountView, SiwcError> {
+async fn siwc_sign_in(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    client_id: Option<String>,
+    prompt_consent: bool,
+) -> Result<siwc::AccountView, SiwcError> {
     let opener = app.clone();
     let res = state
         .siwc
-        .sign_in(client_id, prompt_consent, move |url| opener.opener().open_url(url, None::<&str>).map_err(|e| e.to_string()))
+        .sign_in(client_id, prompt_consent, move |url| {
+            opener
+                .opener()
+                .open_url(url, None::<&str>)
+                .map_err(|e| e.to_string())
+        })
         .await;
     if res.is_ok() {
         notify_siwc_changed(&app, "signed_in", None);
@@ -217,7 +284,11 @@ fn siwc_cancel_sign_in(state: State<'_, AppState>) {
 
 #[tauri::command]
 #[allow(clippy::result_large_err)]
-fn siwc_switch(app: tauri::AppHandle, state: State<'_, AppState>, client_id: String) -> Result<(), SiwcError> {
+fn siwc_switch(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    client_id: String,
+) -> Result<(), SiwcError> {
     state.siwc.switch_account(&client_id)?;
     notify_siwc_changed(&app, "switched", None);
     Ok(())
@@ -231,14 +302,20 @@ fn siwc_ack_welcome(state: State<'_, AppState>) -> Result<(), SiwcError> {
 
 #[tauri::command]
 #[allow(clippy::result_large_err)]
-async fn siwc_sign_out(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<siwc::SignOutResult, SiwcError> {
+async fn siwc_sign_out(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<siwc::SignOutResult, SiwcError> {
     let res = state.siwc.sign_out().await?;
     notify_siwc_changed(&app, "signed_out", Some(res.remote_revoked));
     Ok(res)
 }
 
 #[tauri::command]
-async fn siwc_models(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Vec<siwc::api::Model>, SiwcError> {
+async fn siwc_models(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<siwc::api::Model>, SiwcError> {
     let res = state.siwc.models().await;
     notify_if_signed_out(&app, &res);
     res
@@ -274,9 +351,25 @@ async fn siwc_respond(
     let progress_id = request_id.clone();
     let emitter = app.clone();
     let on_delta = move |chars: usize| {
-        let _ = emitter.emit("ai-progress", AiProgress { request_id: progress_id.clone(), chars });
+        let _ = emitter.emit(
+            "ai-progress",
+            AiProgress {
+                request_id: progress_id.clone(),
+                chars,
+            },
+        );
     };
-    let res = state.siwc.respond(&request_id, &client_id, &model, &instructions, &input, on_delta).await;
+    let res = state
+        .siwc
+        .respond(
+            &request_id,
+            &client_id,
+            &model,
+            &instructions,
+            &input,
+            on_delta,
+        )
+        .await;
     notify_if_signed_out(&app, &res);
     res
 }
@@ -296,7 +389,8 @@ pub fn run() {
         .setup(|app| {
             // アプリ内アップデート。公開鍵とエンドポイントは tauri.conf.json の plugins.updater。
             #[cfg(desktop)]
-            app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
             app_menu::install(app)?;
             let dir = app.path().app_data_dir()?.join("siwc");
             let siwc = siwc::Siwc::new(dir);
@@ -307,11 +401,19 @@ pub fn run() {
                 eprintln!("siwc: skipped keychain cleanup: {e}");
                 Vec::new()
             });
-            app.manage(AppState { siwc, scan_cancel: Mutex::new(None), preview_gen: Default::default() });
+            app.manage(AppState {
+                siwc,
+                scan_cancel: Mutex::new(None),
+                preview_gen: Default::default(),
+            });
             if !orphans.is_empty() {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    handle.state::<AppState>().siwc.remove_orphans(orphans).await;
+                    handle
+                        .state::<AppState>()
+                        .siwc
+                        .remove_orphans(orphans)
+                        .await;
                 });
             }
             Ok(())
@@ -347,7 +449,15 @@ mod tests {
     /// #40: progress events carry the scan id next to the progress fields.
     #[test]
     fn scan_progress_event_shape() {
-        let e = ScanProgressEvent { scan_id: 7, progress: scan::Progress { phase: "measuring", current: "/a".into(), done: 1, total: 2 } };
+        let e = ScanProgressEvent {
+            scan_id: 7,
+            progress: scan::Progress {
+                phase: "measuring",
+                current: "/a".into(),
+                done: 1,
+                total: 2,
+            },
+        };
         assert_eq!(
             serde_json::to_value(e).unwrap(),
             serde_json::json!({ "scanId": 7, "phase": "measuring", "current": "/a", "done": 1, "total": 2 })

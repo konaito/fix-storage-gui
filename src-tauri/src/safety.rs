@@ -38,7 +38,9 @@ pub fn home_ok(home: &str) -> bool {
 /// as is (a symlink at the end is the item itself and is not followed).
 /// Ok(None) when the parent folder does not exist; Err for other failures (permission, loops).
 pub fn real_path(path: &str) -> Result<Option<String>, ()> {
-    let Some(target) = normalize(path) else { return Err(()) };
+    let Some(target) = normalize(path) else {
+        return Err(());
+    };
     if target == "/" {
         return Ok(Some(target));
     }
@@ -67,33 +69,31 @@ fn within(path: &str, dir: &str) -> bool {
 fn protected_paths(home: &str, roots: &[Root]) -> Vec<String> {
     let lib = |name: &str| format!("{home}/Library/{name}");
     let mut v: Vec<String> = roots.iter().map(|r| r.path.clone()).collect();
-    v.extend(
-        [
-            "/".to_string(),
-            home.to_string(),
-            "/System".into(),
-            "/Library".into(),
-            "/usr".into(),
-            "/usr/local/bin".into(),
-            "/usr/local/lib".into(),
-            "/opt/homebrew/bin".into(),
-            "/opt/homebrew/lib".into(),
-            "/Users".into(),
-            "/Applications".into(),
-            "/Volumes".into(),
-            format!("{home}/Library"),
-            lib("Keychains"),
-            lib("Preferences"),
-            lib("Mail"),
-            lib("Messages"),
-            lib("Accounts"),
-            lib("Cookies"),
-            lib("Calendars"),
-            lib("Safari"),
-            lib("Photos"),
-            lib("Biome"),
-        ],
-    );
+    v.extend([
+        "/".to_string(),
+        home.to_string(),
+        "/System".into(),
+        "/Library".into(),
+        "/usr".into(),
+        "/usr/local/bin".into(),
+        "/usr/local/lib".into(),
+        "/opt/homebrew/bin".into(),
+        "/opt/homebrew/lib".into(),
+        "/Users".into(),
+        "/Applications".into(),
+        "/Volumes".into(),
+        format!("{home}/Library"),
+        lib("Keychains"),
+        lib("Preferences"),
+        lib("Mail"),
+        lib("Messages"),
+        lib("Accounts"),
+        lib("Cookies"),
+        lib("Calendars"),
+        lib("Safari"),
+        lib("Photos"),
+        lib("Biome"),
+    ]);
     v
 }
 
@@ -106,7 +106,10 @@ fn blocked_trees(home: &str) -> Vec<(String, &'static str)> {
         ("/usr".into(), "macOS が管理しています"),
         ("/bin".into(), "macOS が管理しています"),
         ("/sbin".into(), "macOS が管理しています"),
-        ("/Library/Keychains".into(), "キーチェーン（パスワードや証明書）"),
+        (
+            "/Library/Keychains".into(),
+            "キーチェーン（パスワードや証明書）",
+        ),
         (h("Library/Keychains"), "キーチェーン（パスワードや証明書）"),
         (h("Library/Accounts"), "アカウント情報"),
         (h("Library/Mail"), "メールのデータ"),
@@ -131,7 +134,11 @@ fn blocked_trees(home: &str) -> Vec<(String, &'static str)> {
 /// Names that usually hold private keys or secrets.
 pub(crate) fn secret_name(name: &str) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
-    if lower.starts_with("id_rsa") || lower.starts_with("id_ed25519") || lower.starts_with("id_ecdsa") || lower.starts_with("id_dsa") {
+    if lower.starts_with("id_rsa")
+        || lower.starts_with("id_ed25519")
+        || lower.starts_with("id_ecdsa")
+        || lower.starts_with("id_dsa")
+    {
         return Some("SSH の秘密鍵");
     }
     if lower == ".env" || lower.starts_with(".env.") {
@@ -166,8 +173,14 @@ impl Rules {
     fn new(home: &str, protected: Vec<String>, trees: Vec<(String, &'static str)>) -> Self {
         Rules {
             home: home.to_ascii_lowercase(),
-            protected: protected.into_iter().map(|p| p.to_ascii_lowercase()).collect(),
-            trees: trees.into_iter().map(|(p, why)| (p.to_ascii_lowercase(), why)).collect(),
+            protected: protected
+                .into_iter()
+                .map(|p| p.to_ascii_lowercase())
+                .collect(),
+            trees: trees
+                .into_iter()
+                .map(|(p, why)| (p.to_ascii_lowercase(), why))
+                .collect(),
         }
     }
 
@@ -222,7 +235,11 @@ impl Guard {
         let protected = protected_paths(h, roots);
         let trees = blocked_trees(h);
         if !home_ok(h) {
-            return Guard { home: None, rules: Rules::new(h, protected, trees), real: None };
+            return Guard {
+                home: None,
+                rules: Rules::new(h, protected, trees),
+                real: None,
+            };
         }
         let real = if check_fs {
             let real_home = std::fs::canonicalize(h)
@@ -231,16 +248,31 @@ impl Guard {
                 .filter(|s| home_ok(s))
                 .unwrap_or_else(|| h.to_string());
             let to_home = |p: &str| to_home_ns(p, &real_home, h);
-            let resolve = |p: &str| std::fs::canonicalize(p).ok().and_then(|r| r.to_str().map(to_home));
+            let resolve = |p: &str| {
+                std::fs::canonicalize(p)
+                    .ok()
+                    .and_then(|r| r.to_str().map(to_home))
+            };
             let mut real_protected = protected.clone();
             real_protected.extend(protected.iter().filter_map(|p| resolve(p)));
             let mut real_trees = trees.clone();
-            real_trees.extend(trees.iter().filter_map(|(p, why)| resolve(p).map(|r| (r, *why))));
-            Some(RealRules { rules: Rules::new(h, real_protected, real_trees), home: real_home })
+            real_trees.extend(
+                trees
+                    .iter()
+                    .filter_map(|(p, why)| resolve(p).map(|r| (r, *why))),
+            );
+            Some(RealRules {
+                rules: Rules::new(h, real_protected, real_trees),
+                home: real_home,
+            })
         } else {
             None
         };
-        Guard { home: Some(h.to_string()), rules: Rules::new(h, protected, trees), real }
+        Guard {
+            home: Some(h.to_string()),
+            rules: Rules::new(h, protected, trees),
+            real,
+        }
     }
 
     /// Why `path` must never be moved to the Trash, or None when it may be.
@@ -312,7 +344,10 @@ mod tests {
         assert!(check("/").is_some());
         assert!(check("/Users/a").is_some());
         assert!(check("/Users/a/Library").is_some());
-        assert!(check("/Users/a/Library/Caches").is_some(), "roots themselves are protected");
+        assert!(
+            check("/Users/a/Library/Caches").is_some(),
+            "roots themselves are protected"
+        );
         assert!(check("/System/Library/Fonts").is_some());
         assert!(check("/Users/a/Library/Keychains/login.keychain-db").is_some());
         assert!(check("/Users/a/.ssh/id_ed25519").is_some());
@@ -352,8 +387,17 @@ mod tests {
     fn empty_or_root_home_blocks_everything() {
         for home in ["", "/", "//", "relative"] {
             let roots = mac_roots(home);
-            for p in ["/etc/hosts", "/opt/homebrew/Cellar/x", "/Library/LaunchDaemons/x.plist", "/var/db/x", "/Users/a/Downloads/x.dmg"] {
-                assert!(cannot_remove(p, home, &roots, false).is_some(), "home={home:?} path={p}");
+            for p in [
+                "/etc/hosts",
+                "/opt/homebrew/Cellar/x",
+                "/Library/LaunchDaemons/x.plist",
+                "/var/db/x",
+                "/Users/a/Downloads/x.dmg",
+            ] {
+                assert!(
+                    cannot_remove(p, home, &roots, false).is_some(),
+                    "home={home:?} path={p}"
+                );
             }
         }
     }
@@ -388,13 +432,29 @@ mod tests {
         std::fs::create_dir_all(d.join("media/movies")).unwrap();
         symlink(d.join("media/movies"), d.join("Movies")).unwrap();
 
-        assert!(c(format!("{h}/Downloads/lnk/config")).is_some(), "through a linked parent");
-        assert!(c(format!("{h}/Downloads/lnk/")).is_none(), "the link itself is an ordinary item");
-        assert!(c(format!("{h}/dotfiles/gh/hosts.yml")).is_some(), "real place of a protected folder");
+        assert!(
+            c(format!("{h}/Downloads/lnk/config")).is_some(),
+            "through a linked parent"
+        );
+        assert!(
+            c(format!("{h}/Downloads/lnk/")).is_none(),
+            "the link itself is an ordinary item"
+        );
+        assert!(
+            c(format!("{h}/dotfiles/gh/hosts.yml")).is_some(),
+            "real place of a protected folder"
+        );
         assert!(c(format!("{h}/dotfiles/gh")).is_some());
-        assert!(c(format!("{h}/media/movies")).is_some(), "real place of a root");
+        assert!(
+            c(format!("{h}/media/movies")).is_some(),
+            "real place of a root"
+        );
         // Ordinary items in a home under /var (-> /private/var) must stay allowed.
-        assert!(c(format!("{h}/Downloads/ok.txt")).is_none(), "{:?}", c(format!("{h}/Downloads/ok.txt")));
+        assert!(
+            c(format!("{h}/Downloads/ok.txt")).is_none(),
+            "{:?}",
+            c(format!("{h}/Downloads/ok.txt"))
+        );
         assert!(c(format!("{h}/media/movies/clip.mov")).is_none());
         let _ = std::fs::remove_dir_all(&d);
     }

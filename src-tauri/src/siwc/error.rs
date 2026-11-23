@@ -17,7 +17,14 @@ pub struct SiwcError {
 
 impl SiwcError {
     pub fn new(kind: &str, message: impl Into<String>) -> Self {
-        Self { kind: kind.into(), code: None, param: None, status: None, request_id: None, message: message.into() }
+        Self {
+            kind: kind.into(),
+            code: None,
+            param: None,
+            status: None,
+            request_id: None,
+            message: message.into(),
+        }
     }
     pub fn with_code(mut self, code: Option<String>) -> Self {
         self.code = code;
@@ -48,7 +55,9 @@ pub fn kind_for_code(code: &str) -> &'static str {
         "subscription_sharing_unsupported_capability" => "unsupported_capability",
         "subscription_sharing_route_not_supported" => "route_not_supported",
         "subscription_sharing_invalid_user" => "invalid_user",
-        "chatpass_v2_scope_not_authorized" | "chatpass_v2_invalid_authorization_context" => "not_authorized",
+        "chatpass_v2_scope_not_authorized" | "chatpass_v2_invalid_authorization_context" => {
+            "not_authorized"
+        }
         "subscription_sharing_user_unavailable" => "user_unavailable",
         _ => "api_error",
     }
@@ -69,6 +78,11 @@ pub fn kind_for_status(status: u16) -> &'static str {
 pub fn is_terminal_refresh_error(code: &str) -> bool {
     matches!(
         code,
-        "invalid_grant" | "invalid_refresh_token" | "token_expired" | "refresh_token_expired" | "refresh_token_invalidated" | "refresh_token_reused"
+        "invalid_grant"
+            | "invalid_refresh_token"
+            | "token_expired"
+            | "refresh_token_expired"
+            | "refresh_token_invalidated"
+            | "refresh_token_reused"
     )
 }

@@ -61,7 +61,12 @@ pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
     }
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
     {
-        let mut f = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)?;
         f.write_all(data)?;
         f.sync_all()?;
     }
@@ -88,7 +93,10 @@ impl Store {
             }
         }
         let id = format!("urn:uuid:{}", uuid::Uuid::new_v4().hyphenated());
-        let body = serde_json::to_vec_pretty(&HostFile { ext_agent_host_id: id.clone() }).map_err(|e| e.to_string())?;
+        let body = serde_json::to_vec_pretty(&HostFile {
+            ext_agent_host_id: id.clone(),
+        })
+        .map_err(|e| e.to_string())?;
         write_private(&path, &body).map_err(|e| format!("host ID を保存できません: {e}"))?;
         Ok(id)
     }
@@ -100,13 +108,18 @@ impl Store {
         let path = self.dir.join("accounts.json");
         let text = match fs::read_to_string(&path) {
             Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(AccountsFile::default()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(AccountsFile::default())
+            }
             Err(e) => return Err(format!("アカウント情報（accounts.json）を読めません: {e}")),
         };
         match parse_accounts(&text) {
             Ok(a) => Ok(a),
             Err(why) => {
-                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
                 let aside = self.dir.join(format!("accounts.json.broken-{secs}"));
                 match fs::rename(&path, &aside) {
                     Ok(()) => Err(format!(
@@ -149,7 +162,13 @@ pub(crate) fn parse_accounts(text: &str) -> Result<AccountsFile, String> {
 pub fn keychain_client_ids() -> Result<Vec<String>, String> {
     use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
-    let found = match ItemSearchOptions::new().class(ItemClass::generic_password()).service(KEYCHAIN_SERVICE).load_attributes(true).limit(Limit::All).search() {
+    let found = match ItemSearchOptions::new()
+        .class(ItemClass::generic_password())
+        .service(KEYCHAIN_SERVICE)
+        .load_attributes(true)
+        .limit(Limit::All)
+        .search()
+    {
         Ok(r) => r,
         Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => return Ok(vec![]),
         Err(e) => return Err(format!("キーチェーンを検索できません: {e}")),
@@ -172,7 +191,10 @@ pub fn keychain_client_ids() -> Result<Vec<String>, String> {
 
 #[cfg(target_os = "macos")]
 fn secret_get(_dir: &Path, client_id: &str) -> Option<String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, client_id).ok()?.get_password().ok()
+    keyring::Entry::new(KEYCHAIN_SERVICE, client_id)
+        .ok()?
+        .get_password()
+        .ok()
 }
 #[cfg(target_os = "macos")]
 fn secret_set(_dir: &Path, client_id: &str, value: &str) -> Result<(), String> {
@@ -216,7 +238,11 @@ mod tests {
         let b = s.host_id().unwrap();
         assert_eq!(a, b);
         assert!(a.starts_with("urn:uuid:") && a.len() == "urn:uuid:".len() + 36);
-        let mode = fs::metadata(dir.join("host.json")).unwrap().permissions().mode() & 0o777;
+        let mode = fs::metadata(dir.join("host.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(mode, 0o600);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -234,10 +260,17 @@ mod tests {
         let kept = fs::read_dir(&dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().starts_with("accounts.json.broken"))
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("accounts.json.broken")
+            })
             .any(|e| fs::read(e.path()).unwrap() == broken);
         let _ = fs::remove_dir_all(&dir);
-        assert!(kept, "the broken accounts.json must be moved aside with its original bytes");
+        assert!(
+            kept,
+            "the broken accounts.json must be moved aside with its original bytes"
+        );
     }
 
     #[test]
@@ -268,4 +301,3 @@ mod tests {
         assert!(parse_accounts("{").is_err());
     }
 }
-
