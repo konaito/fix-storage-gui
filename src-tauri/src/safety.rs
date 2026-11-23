@@ -5,7 +5,7 @@
 //! (`src/core/browse.ts`, MIT, (c) 2026 the fix-storage authors). The rest are extra
 //! rules added by fix-storage-gui: secrets, keys, Git repositories, Keychains.
 
-use crate::roots::Root;
+use crate::roots::{CategoryId, Root};
 use std::io::ErrorKind;
 use std::path::{Component, Path};
 
@@ -162,6 +162,49 @@ pub(crate) fn secret_name(name: &str) -> Option<&'static str> {
     None
 }
 
+/// `dir` appears in `path` as a whole folder: followed by "/" or the end.
+fn has_dir(path: &str, dir: &str) -> bool {
+    path.match_indices(dir)
+        .any(|(i, _)| matches!(path.as_bytes().get(i + dir.len()), None | Some(b'/')))
+}
+
+/// Things a tool owns; removing them by hand breaks the tool. The same rules that make
+/// fix-storage's classify() say "system" (`src/cli-core/classify.ts`), with case ignored.
+/// `lower` is a normalized, lowercased path. test/fixtures/tool-managed.json holds examples both sides check.
+fn tool_managed(lower: &str) -> Option<&'static str> {
+    let name = lower.rsplit('/').next().unwrap_or("");
+    if name == "docker.raw" || lower.contains("/com.docker.docker/") {
+        return Some("Docker のディスク（docker system prune で縮める）");
+    }
+    if lower.contains("/.ollama/models") {
+        return Some("ローカル AI のモデル（ollama rm で消す）");
+    }
+    if lower.starts_with("/opt/homebrew")
+        || lower.starts_with("/usr/local/cellar")
+        || lower.starts_with("/home/linuxbrew/")
+    {
+        return Some("Homebrew が管理しています（brew cleanup で古い版を消す）");
+    }
+    let var_lib = |tool: &str| same_or_within(lower, &format!("/var/lib/{tool}"));
+    let local_share = |tool: &str| has_dir(lower, &format!("/.local/share/{tool}"));
+    if var_lib("docker") || local_share("docker") {
+        return Some("Docker のイメージとボリューム（docker system prune で縮める）");
+    }
+    if var_lib("containers") || local_share("containers") {
+        return Some("Podman のイメージ（podman system prune で縮める）");
+    }
+    if var_lib("flatpak") || local_share("flatpak") {
+        return Some("Flatpak が管理しています");
+    }
+    if var_lib("snapd") {
+        return Some("Snap が管理しています");
+    }
+    if var_lib("libvirt") {
+        return Some("仮想マシン");
+    }
+    None
+}
+
 /// Protected paths and folders, lowercased: APFS ignores case by default, so `~/.SSH` is `~/.ssh`.
 struct Rules {
     home: String,
@@ -189,6 +232,9 @@ impl Rules {
         let lower = target.to_ascii_lowercase();
         if self.protected.iter().any(|p| p == &lower) {
             return Some("macOS かアカウントに必要なフォルダです".into());
+        }
+        if let Some(why) = tool_managed(&lower) {
+            return Some(why.into());
         }
         for (dir, why) in &self.trees {
             if same_or_within(&lower, dir) {
@@ -226,6 +272,68 @@ struct RealRules {
     /// The home folder resolved through symlinks (on macOS `/var/...` becomes `/private/var/...`).
     home: String,
     rules: Rules,
+    /// Cache and Trash roots, lowercased, as written and resolved. Their contents are rebuilt by the
+    /// tools that own them (pre-commit, SwiftPM checkouts), so the Git search does not enter them.
+    rebuilt: Vec<String>,
+}
+
+impl RealRules {
+    fn rebuilt(&self, path: &str) -> bool {
+        let lower = path.to_ascii_lowercase();
+        self.rebuilt.iter().any(|r| same_or_within(&lower, r))
+    }
+}
+
+/// How far below a folder the Git search looks: `.git` is found up to `folder/a/b/c/.git`.
+/// Covers layouts like `~/work/<org>/<repo>` with room to spare.
+const GIT_SEARCH_DEPTH: usize = 3;
+/// How many entries one Git search reads before giving up. The scan checks up to 400 items,
+/// so the worst case is 400 × this many directory entries.
+const GIT_SEARCH_ENTRIES: usize = 2000;
+
+/// Whether a `.git` (folder or file, any case) is in `dir` or in a folder up to [`GIT_SEARCH_DEPTH`]
+/// levels below it. Breadth first: every folder of a level is first asked for `.git` directly (not
+/// counted), and only then are the folders listed, so a big folder cannot hide a repository next to it.
+/// Links met on the way down are not followed, folders that cannot be read are skipped, folders for
+/// which `skip` is true are not entered, and after [`GIT_SEARCH_ENTRIES`] listed entries the search
+/// stops and answers false.
+fn holds_git_repo(dir: &Path, skip: impl Fn(&str) -> bool) -> bool {
+    let mut level = vec![dir.to_path_buf()];
+    let mut seen = 0usize;
+    for depth in 0..=GIT_SEARCH_DEPTH {
+        if level
+            .iter()
+            .any(|d| d.join(".git").symlink_metadata().is_ok())
+        {
+            return true;
+        }
+        if depth == GIT_SEARCH_DEPTH {
+            break;
+        }
+        let mut next = Vec::new();
+        for d in &level {
+            let Ok(entries) = std::fs::read_dir(d) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                seen += 1;
+                if seen > GIT_SEARCH_ENTRIES {
+                    return false;
+                }
+                if e.file_name().to_string_lossy().eq_ignore_ascii_case(".git") {
+                    return true;
+                }
+                if e.file_type().is_ok_and(|t| t.is_dir()) {
+                    let child = e.path();
+                    if child.to_str().is_none_or(|s| !skip(s)) {
+                        next.push(child);
+                    }
+                }
+            }
+        }
+        level = next;
+    }
+    false
 }
 
 impl Guard {
@@ -261,9 +369,18 @@ impl Guard {
                     .iter()
                     .filter_map(|(p, why)| resolve(p).map(|r| (r, *why))),
             );
+            let rebuilt_roots = roots
+                .iter()
+                .filter(|r| matches!(r.category, CategoryId::Caches | CategoryId::Trash));
+            let mut rebuilt: Vec<String> = Vec::new();
+            for r in rebuilt_roots {
+                rebuilt.push(r.path.to_ascii_lowercase());
+                rebuilt.extend(resolve(&r.path).map(|p| p.to_ascii_lowercase()));
+            }
             Some(RealRules {
                 rules: Rules::new(h, real_protected, real_trees),
                 home: real_home,
+                rebuilt,
             })
         } else {
             None
@@ -301,8 +418,17 @@ impl Guard {
             return Some(why);
         }
         let p = Path::new(&resolved);
-        if p.is_dir() && p.join(".git").exists() {
-            return Some("Git リポジトリ（未 push の変更が失われるおそれ）".into());
+        if p.is_dir() {
+            if p.join(".git").exists() {
+                return Some("Git リポジトリ（未 push の変更が失われるおそれ）".into());
+            }
+            // A link is moved by itself, never what it points to, so only real folders are searched.
+            let real_dir = std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
+            if real_dir && !real.rebuilt(&resolved) && holds_git_repo(p, |s| real.rebuilt(s)) {
+                return Some(
+                    "Git リポジトリを含むフォルダ（未 push の変更が失われるおそれ）".into(),
+                );
+            }
         }
         None
     }
@@ -456,6 +582,121 @@ mod tests {
             c(format!("{h}/Downloads/ok.txt"))
         );
         assert!(c(format!("{h}/media/movies/clip.mov")).is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #31: the paths classify.ts calls "system" (things a tool owns) are refused here too.
+    /// test/toolManaged.test.ts checks the same file against classify.ts.
+    #[test]
+    fn tool_managed_matches_classify() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../test/fixtures/tool-managed.json")).unwrap();
+        let paths = |key: &str| -> Vec<String> {
+            fixture[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["path"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let system = paths("system");
+        let not_system = paths("notSystem");
+        assert!(!system.is_empty() && !not_system.is_empty());
+        for p in &system {
+            assert!(check(p).is_some(), "{p} should be blocked");
+        }
+        for p in &not_system {
+            assert_eq!(check(p), None, "{p} should be allowed");
+        }
+        // APFS ignores case, so the rules do too.
+        assert!(check("/Users/a/VMs/DOCKER.RAW").is_some());
+        assert!(check("/Users/a/.Ollama/Models/blobs").is_some());
+    }
+
+    /// #32: a folder is refused when a Git repository sits a few levels below it.
+    #[test]
+    fn blocks_folders_holding_git_repos() {
+        use std::os::unix::fs::symlink;
+        let (d, h) = real_home("gitrepo");
+        let roots = mac_roots(&h);
+        let c = |p: String| cannot_remove(&p, &h, &roots, true);
+        let mk = |rel: &str| std::fs::create_dir_all(d.join(rel)).unwrap();
+        mk("work/repoA/.git");
+        mk("work/repoA/src");
+        mk("deep/a/b/c/.git");
+        mk("deeper/a/b/c/d/.git");
+        mk("plain/a/b");
+        std::fs::write(d.join("plain/a/b/x.txt"), b"x").unwrap();
+        // git worktrees and submodules have a .git file, not a folder
+        mk("wt/feature");
+        std::fs::write(d.join("wt/feature/.git"), b"gitdir: /elsewhere").unwrap();
+        mk("upper/proj/.GIT");
+        // a link to a repository: moving the link does not touch the repository
+        mk("links");
+        symlink(d.join("work/repoA"), d.join("links/repo")).unwrap();
+        // caches are rebuilt by the tools that own them, so they are not searched
+        mk(".cache/pre-commit/repoX/.git");
+
+        assert!(
+            c(format!("{h}/work/repoA")).is_some(),
+            "the repository itself"
+        );
+        assert!(c(format!("{h}/work")).is_some(), "parent of a repository");
+        assert!(
+            c(format!("{h}/deep")).is_some(),
+            "repository 3 levels below"
+        );
+        assert!(
+            c(format!("{h}/deeper")).is_none(),
+            "repository 4 levels below is past the limit"
+        );
+        assert!(c(format!("{h}/wt")).is_some(), ".git file");
+        assert!(c(format!("{h}/upper")).is_some(), ".GIT in another case");
+        assert!(c(format!("{h}/plain")).is_none(), "no repository inside");
+        assert!(c(format!("{h}/links")).is_none(), "links are not followed");
+        symlink(d.join("work"), d.join("worklink")).unwrap();
+        assert!(
+            c(format!("{h}/worklink")).is_none(),
+            "an item that is a link is not searched"
+        );
+        assert!(
+            c(format!("{h}/.cache/pre-commit")).is_none(),
+            "caches are not searched"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #32: a big folder next to a repository must not use up the search before the repository is seen.
+    #[test]
+    fn big_sibling_does_not_hide_a_repo() {
+        let (d, h) = real_home("gitbig");
+        let roots = mac_roots(&h);
+        let c = |p: String| cannot_remove(&p, &h, &roots, true);
+        for name in ["photos", "a", "m", "z", "0"] {
+            std::fs::create_dir_all(d.join(format!("stuff/{name}"))).unwrap();
+            for i in 0..(GIT_SEARCH_ENTRIES / 4) {
+                std::fs::write(d.join(format!("stuff/{name}/{i}.jpg")), b"").unwrap();
+            }
+        }
+        std::fs::create_dir_all(d.join("stuff/repo/.git")).unwrap();
+        assert!(
+            c(format!("{h}/stuff")).is_some(),
+            "repository next to big folders"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #32: past the entry limit the search gives up and allows the folder.
+    #[test]
+    fn git_search_gives_up_past_the_limit() {
+        let (d, h) = real_home("gitlimit");
+        let roots = mac_roots(&h);
+        std::fs::create_dir_all(d.join("big/flat")).unwrap();
+        for i in 0..=GIT_SEARCH_ENTRIES {
+            std::fs::write(d.join(format!("big/flat/{i}.txt")), b"").unwrap();
+        }
+        std::fs::create_dir_all(d.join("big/flat/x/y/.git")).unwrap();
+        assert!(cannot_remove(&format!("{h}/big"), &h, &roots, true).is_none());
         let _ = std::fs::remove_dir_all(&d);
     }
 

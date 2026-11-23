@@ -62,6 +62,17 @@ pub fn move_to_trash(
     home: &str,
     on_progress: impl Fn(usize, usize, &str),
 ) -> Vec<TrashOutcome> {
+    move_to_trash_with(paths, home, on_progress, move_one)
+}
+
+/// [`move_to_trash`] with the step that really moves an item passed in, so tests can see
+/// which paths would have reached it.
+fn move_to_trash_with(
+    paths: &[String],
+    home: &str,
+    on_progress: impl Fn(usize, usize, &str),
+    mover: impl Fn(&str) -> Result<(), String>,
+) -> Vec<TrashOutcome> {
     let roots = mac_roots(home);
     let guard = Guard::new(home, &roots, true);
     let total = paths.len();
@@ -79,7 +90,7 @@ pub fn move_to_trash(
                 return fail(format!("保護されているため移動しません: {why}"));
             }
             match trash_target(path) {
-                Some(target) => match move_one(&target) {
+                Some(target) => match mover(&target) {
                     Ok(()) => TrashOutcome {
                         path: path.clone(),
                         ok: true,
@@ -118,6 +129,70 @@ mod tests {
         let t = trash_target(&format!("{}/lnk/", d.to_string_lossy())).unwrap();
         assert_eq!(t, format!("{real_dir}/lnk"));
         assert!(trash_target(&format!("{}/nope", d.to_string_lossy())).is_none());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// #47: protected items never reach the step that moves things to the Trash.
+    #[test]
+    fn protected_paths_never_reach_the_mover() {
+        use std::cell::RefCell;
+        let d = std::env::temp_dir().join(format!("fsg-trash-guard-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let h = d.to_string_lossy().trim_end_matches('/').to_string();
+        let file = |rel: &str| {
+            let p = d.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, b"x").unwrap();
+        };
+        file(".ssh/config");
+        file("proj/.git/HEAD");
+        file("proj2/.env");
+        file("work/repoA/.git/HEAD");
+        file("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw");
+        file(".ollama/models/blobs/sha256-abc");
+        file("Downloads/ok.txt");
+        let protected = [
+            ".ssh/config",
+            "proj",
+            "proj2/.env",
+            "work",
+            "Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw",
+            ".ollama/models",
+        ];
+        let mut paths: Vec<String> = protected.iter().map(|r| format!("{h}/{r}")).collect();
+        paths.push(format!("{h}/Downloads/ok.txt"));
+
+        let moved = RefCell::new(Vec::<String>::new());
+        let out = move_to_trash_with(
+            &paths,
+            &h,
+            |_, _, _| {},
+            |p| {
+                moved.borrow_mut().push(p.to_string());
+                Ok(())
+            },
+        );
+
+        let moved = moved.into_inner();
+        assert_eq!(
+            moved.len(),
+            1,
+            "only the ordinary file may reach the mover: {moved:?}"
+        );
+        assert!(moved[0].ends_with("/Downloads/ok.txt"));
+        for (o, rel) in out.iter().zip(protected) {
+            assert!(!o.ok, "{rel} was moved");
+            assert!(
+                o.error
+                    .as_deref()
+                    .unwrap_or("")
+                    .starts_with("保護されているため移動しません"),
+                "{rel}: {:?}",
+                o.error
+            );
+            assert!(d.join(rel).exists());
+        }
+        assert!(out.last().unwrap().ok);
         let _ = std::fs::remove_dir_all(&d);
     }
 
