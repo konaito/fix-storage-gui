@@ -17,10 +17,15 @@ export const chatGptProvider: JudgeProvider = {
     const unlisten = await listen<{ requestId: string; chars: number }>("ai-progress", (e) => {
       if (e.payload.requestId === requestId) options.onProgress?.(e.payload.chars);
     });
+    // Stopping the run drops this request's stream on the Rust side (#21).
+    const cancel = () => void api.siwcCancel(requestId).catch(() => {});
+    options.signal?.addEventListener("abort", cancel, { once: true });
     try {
-      const text = await api.siwcRespond(requestId, options.model, INSTRUCTIONS, buildInput(items));
+      if (options.signal?.aborted) throw new Error("中止しました");
+      const text = await api.siwcRespond(requestId, options.clientId, options.model, INSTRUCTIONS, buildInput(items));
       return parseJudgements(text, new Set(items.map((i) => i.id)));
     } finally {
+      options.signal?.removeEventListener("abort", cancel);
       unlisten();
     }
   },

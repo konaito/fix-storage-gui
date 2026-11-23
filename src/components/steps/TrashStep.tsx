@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ratio } from "../../flow/progress";
 import type { TrashProgress } from "../../lib/api";
 import { formatBytes } from "../../lib/format";
-import { AI_VERDICT_JA } from "../../lib/labels";
+import { AI_VERDICT_JA, SHARED_JA } from "../../lib/labels";
 import type { Row } from "../../lib/rows";
 import { StepBar } from "../ActionBar";
 import { CurrentPath, LoadingPanel, ProgressBar } from "../Loader";
@@ -21,6 +21,7 @@ export function TrashStep({ rows, trashing, progress, onBack, onDeselect, onConf
   const [checked, setChecked] = useState(false);
   const total = rows.reduce((s, r) => s + r.size, 0);
   const caution = rows.filter((r) => r.final.verdict !== "safe");
+  const shared = rows.filter((r) => r.shared).length;
 
   if (trashing) {
     return (
@@ -80,6 +81,11 @@ export function TrashStep({ rows, trashing, progress, onBack, onDeselect, onConf
       </StepBar>
       {caution.length > 0 && (
         <div className="callout warn-box">「{AI_VERDICT_JA.caution}」の項目が {caution.length} 件含まれています。内容をよく確認してください。</div>
+      )}
+      {shared > 0 && (
+        <div className="callout warn-box">
+          {SHARED_JA}の項目が {shared} 件含まれています。ハードリンクでほかの場所と中身を共有しているため、空く量は合計の約 {formatBytes(total)} より少ないことがあります。
+        </div>
       )}
       {rows.length === 0 ? (
         <div className="empty small-empty">

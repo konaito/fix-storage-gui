@@ -93,11 +93,30 @@ impl Store {
         Ok(id)
     }
 
-    pub fn accounts(&self) -> AccountsFile {
-        fs::read_to_string(self.dir.join("accounts.json"))
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
+    /// Reads `accounts.json`. A missing file means no accounts yet. A file that can't be parsed is
+    /// moved aside (`accounts.json.broken-<unix seconds>`) and reported as an error, so it is never
+    /// silently replaced by an empty list on the next save. Other read errors are returned as is.
+    pub fn accounts(&self) -> Result<AccountsFile, String> {
+        let path = self.dir.join("accounts.json");
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(AccountsFile::default()),
+            Err(e) => return Err(format!("アカウント情報（accounts.json）を読めません: {e}")),
+        };
+        match parse_accounts(&text) {
+            Ok(a) => Ok(a),
+            Err(why) => {
+                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let aside = self.dir.join(format!("accounts.json.broken-{secs}"));
+                match fs::rename(&path, &aside) {
+                    Ok(()) => Err(format!(
+                        "アカウント情報（accounts.json）が壊れていたため {} に退避しました（{why}）。保存済みのアカウントは読み込めないので、もう一度サインインしてください",
+                        aside.display()
+                    )),
+                    Err(e) => Err(format!("アカウント情報（accounts.json）が壊れていて、退避もできませんでした（{why} / {e}）")),
+                }
+            }
+        }
     }
 
     pub fn save_accounts(&self, a: &AccountsFile) -> Result<(), String> {
@@ -118,6 +137,37 @@ impl Store {
     pub fn clear_credentials(&self, client_id: &str) -> Result<(), String> {
         secret_delete(&self.dir, client_id)
     }
+}
+
+pub(crate) fn parse_accounts(text: &str) -> Result<AccountsFile, String> {
+    serde_json::from_str(text).map_err(|e| e.to_string())
+}
+
+/// Client ids (keychain account names) of every item stored under [`KEYCHAIN_SERVICE`].
+/// Reads attributes only, never the secrets.
+#[cfg(target_os = "macos")]
+pub fn keychain_client_ids() -> Result<Vec<String>, String> {
+    use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+    let found = match ItemSearchOptions::new().class(ItemClass::generic_password()).service(KEYCHAIN_SERVICE).load_attributes(true).limit(Limit::All).search() {
+        Ok(r) => r,
+        Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => return Ok(vec![]),
+        Err(e) => return Err(format!("キーチェーンを検索できません: {e}")),
+    };
+    let mut ids: Vec<String> = found
+        .iter()
+        .filter_map(|r| r.simplify_dict())
+        .filter(|d| d.get("svce").map(String::as_str) == Some(KEYCHAIN_SERVICE))
+        .filter_map(|d| d.get("acct").cloned())
+        .filter(|a| !a.is_empty())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+#[cfg(not(target_os = "macos"))]
+pub fn keychain_client_ids() -> Result<Vec<String>, String> {
+    Ok(vec![])
 }
 
 #[cfg(target_os = "macos")]
@@ -159,7 +209,7 @@ mod tests {
     #[test]
     fn host_id_is_stable_and_private() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("fsg-store-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("fsg-store-host-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let s = Store::new(dir.clone());
         let a = s.host_id().unwrap();
@@ -170,4 +220,52 @@ mod tests {
         assert_eq!(mode, 0o600);
         let _ = fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn broken_accounts_json_is_kept_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("fsg-store-broken-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let broken = b"{\"active\": \"oaiapp_x\", \"accounts\": [ ";
+        fs::write(dir.join("accounts.json"), broken).unwrap();
+        let s = Store::new(dir.clone());
+        let _ = s.accounts();
+        let _ = s.save_accounts(&AccountsFile::default());
+        let kept = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("accounts.json.broken"))
+            .any(|e| fs::read(e.path()).unwrap() == broken);
+        let _ = fs::remove_dir_all(&dir);
+        assert!(kept, "the broken accounts.json must be moved aside with its original bytes");
+    }
+
+    #[test]
+    fn broken_accounts_json_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("fsg-store-broken-err-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("accounts.json"), b"not json").unwrap();
+        let s = Store::new(dir.clone());
+        let first = s.accounts();
+        // Moved aside: the next read starts from an empty list (the error was already reported).
+        let second = s.accounts();
+        let _ = fs::remove_dir_all(&dir);
+        let msg = first.expect_err("a broken file must not read as empty");
+        assert!(msg.contains("退避"), "{msg}");
+        assert!(second.unwrap().accounts.is_empty());
+    }
+
+    #[test]
+    fn missing_accounts_json_is_empty_and_valid_json_parses() {
+        let dir = std::env::temp_dir().join(format!("fsg-store-missing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let s = Store::new(dir.clone());
+        assert!(s.accounts().unwrap().accounts.is_empty());
+        let a = parse_accounts(r#"{"active":"oaiapp_a","accounts":[{"client_id":"oaiapp_a","subject":"u","email":null,"scopes":[],"plan_enabled":true}]}"#).unwrap();
+        assert_eq!(a.active.as_deref(), Some("oaiapp_a"));
+        assert_eq!(a.accounts.len(), 1);
+        assert!(parse_accounts("{").is_err());
+    }
 }
+

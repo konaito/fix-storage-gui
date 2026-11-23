@@ -30,7 +30,7 @@ export function Stepper({ flow, canGo, onGo }: Props) {
                 <span className="step-label" aria-hidden="true">
                   <span className="step-label-full">{s.label}</span>
                   <span className="step-label-short">{s.shortLabel}</span>
-                  {s.id === "ai" && !flow.aiFirst && <span className="opt">{st === "skipped" ? "スキップ" : "任意"}</span>}
+                  {s.id === "ai" && (!flow.aiFirst || st === "skipped") && <span className="opt">{st === "skipped" ? "スキップ" : "任意"}</span>}
                 </span>
               </button>
             </li>
