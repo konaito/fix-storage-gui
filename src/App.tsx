@@ -19,6 +19,8 @@ import { ScanningStep } from "./components/steps/ScanningStep";
 import { MIN_SIZES, TargetStep, type Target } from "./components/steps/TargetStep";
 import { TrashStep } from "./components/steps/TrashStep";
 import { safePaths, summarize } from "./flow/progress";
+import { afterScan, type HistoryOp } from "./flow/scanNav";
+import { withAllSafe } from "./flow/selection";
 import { effectiveSort, type SortMode } from "./flow/order";
 import { canGo, flowReducer, initialFlow, type StepId } from "./flow/steps";
 import { api, isSiwcError, type EnvInfo, type Model, type ScanProgress, type TrashOutcome, type TrashProgress } from "./lib/api";
@@ -191,8 +193,12 @@ export default function App() {
     if (e) setError(describeError(e));
   }
 
-  async function runScan(t: Target, pushHistory: boolean) {
+  async function runScan(t: Target, op: HistoryOp) {
     if (flow.busy || blockedByUpdate()) return;
+    const nav = { target, scanned, history };
+    const hadScan = flow.hasScan;
+    // The scanning step shows this target, also when going up (#37).
+    setTarget(t);
     setError(null);
     setNotice(null);
     setProgress(null);
@@ -202,9 +208,10 @@ export default function App() {
     const scanId = ++scanIdRef.current;
     try {
       const res = await api.scan(t.kind === "folder" ? t.path : null, minSize, scanId);
-      if (pushHistory) setHistory((h) => [...h, scanned]);
-      setScanned(t);
-      setTarget(t);
+      const after = afterScan(nav, t, op, true, hadScan);
+      setHistory(after.history);
+      setScanned(after.scanned);
+      setTarget(after.target);
       const next = res.items.map((i) => toRow(i));
       const sendable = next.filter((r) => !r.final.locked).length;
       setRows(next);
@@ -218,7 +225,8 @@ export default function App() {
       dispatch({ type: "scanEnd", ok: true, aiTargets: sendable });
     } catch (e) {
       setError(describeError(e));
-      setTarget(scanned);
+      // The history stays as it was, so "上のフォルダへ" still works (#37).
+      setTarget(afterScan(nav, t, op, false, hadScan).target);
       dispatch({ type: "scanEnd", ok: false });
     } finally {
       setProgress(null);
@@ -237,8 +245,7 @@ export default function App() {
   function goUp() {
     const prev = history[history.length - 1];
     if (!prev || blockedByUpdate()) return;
-    setHistory((h) => h.slice(0, -1));
-    void runScan(prev, false);
+    void runScan(prev, "pop");
   }
 
   async function sendToAi(mask: boolean) {
@@ -349,9 +356,13 @@ export default function App() {
   }, [view]);
 
   const chosen = view.filter((r) => selected.has(r.path) && selectable(r.final));
+  // flow.busy is still null for a second click in the same tick, so a ref stops the move from running twice (#38).
+  const trashing = useRef(false);
 
   async function doTrash() {
     if (chosen.length === 0 || blockedByUpdate()) return;
+    if (trashing.current) return;
+    trashing.current = true;
     const sizeOf = new Map(chosen.map((r) => [r.path, r.size]));
     setTrashProgress(null);
     setTrashError(null);
@@ -368,6 +379,7 @@ export default function App() {
       setMovedBytes(0);
       setTrashError(describeError(e));
     } finally {
+      trashing.current = false;
       setTrashProgress(null);
       dispatch({ type: "trashEnd" });
     }
@@ -405,8 +417,7 @@ export default function App() {
           onMinSize={setMinSize}
           onStart={() => {
             if (blockedByUpdate()) return;
-            setHistory([]);
-            void runScan(target, false);
+            void runScan(target, "reset");
           }}
           disk={disk}
           canResume={flow.hasScan}
@@ -442,16 +453,16 @@ export default function App() {
           selected={selected}
           onToggle={toggle}
           onSelectPaths={selectPaths}
-          onSelectAllSafe={() => selectPaths(safePaths(view))}
+          onSelectAllSafe={() => selectPaths(withAllSafe(selected, safePaths(view)))}
           onClearSelection={() => setSelected(new Set())}
           canGoUp={history.length > 0}
           onGoUp={goUp}
           onDrill={(path) => {
             if (blockedByUpdate()) return;
             setTarget({ kind: "folder", path });
-            void runScan({ kind: "folder", path }, true);
+            void runScan({ kind: "folder", path }, "push");
           }}
-          onRescan={() => void runScan(scanned, false)}
+          onRescan={() => void runScan(scanned, "keep")}
           onChangeTarget={() => go("target")}
           aiTargets={flow.aiDone ? aiTargets.length : aiQueue.length}
           onGoAi={() => go("ai")}
