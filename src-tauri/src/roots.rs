@@ -87,7 +87,7 @@ fn is_within(path: &str, root: &str) -> bool {
 pub fn category_of(path: &str, roots: &[Root]) -> CategoryId {
     let mut best: Option<&Root> = None;
     for root in roots {
-        if is_within(path, &root.path) && best.map_or(true, |b| root.path.len() > b.path.len()) {
+        if is_within(path, &root.path) && best.is_none_or(|b| root.path.len() > b.path.len()) {
             best = Some(root);
         }
     }

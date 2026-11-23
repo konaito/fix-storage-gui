@@ -92,8 +92,7 @@ fn protected_paths(home: &str, roots: &[Root]) -> Vec<String> {
             lib("Safari"),
             lib("Photos"),
             lib("Biome"),
-        ]
-        .into_iter(),
+        ],
     );
     v
 }
@@ -232,7 +231,7 @@ impl Guard {
                 .filter(|s| home_ok(s))
                 .unwrap_or_else(|| h.to_string());
             let to_home = |p: &str| to_home_ns(p, &real_home, h);
-            let resolve = |p: &str| std::fs::canonicalize(p).ok().and_then(|r| r.to_str().map(|r| to_home(r)));
+            let resolve = |p: &str| std::fs::canonicalize(p).ok().and_then(|r| r.to_str().map(to_home));
             let mut real_protected = protected.clone();
             real_protected.extend(protected.iter().filter_map(|p| resolve(p)));
             let mut real_trees = trees.clone();

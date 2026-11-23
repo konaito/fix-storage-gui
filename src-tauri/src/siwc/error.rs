@@ -2,6 +2,8 @@ use serde::Serialize;
 
 /// Error sent to the UI. `kind` drives the recovery UI; the rest is kept for diagnostics
 /// (the docs ask to preserve status, error code and request ID).
+/// It stays unboxed: boxing would change every signature that returns it, so those functions
+/// carry `#[allow(clippy::result_large_err)]` instead (#45).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SiwcError {

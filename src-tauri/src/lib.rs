@@ -1,3 +1,8 @@
+// SiwcError carries a kind, a message and optional details for the UI, so it is larger than
+// clippy's 128-byte default. Boxing it would change every command and siwc function signature;
+// errors are rare and small in absolute terms, so the size is accepted crate-wide (#45).
+#![allow(clippy::result_large_err)]
+
 mod app_menu;
 mod docs;
 mod preview;
@@ -186,11 +191,13 @@ struct SiwcChanged {
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 fn siwc_status(state: State<'_, AppState>) -> Result<siwc::Status, SiwcError> {
     state.siwc.status()
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 async fn siwc_sign_in(app: tauri::AppHandle, state: State<'_, AppState>, client_id: Option<String>, prompt_consent: bool) -> Result<siwc::AccountView, SiwcError> {
     let opener = app.clone();
     let res = state
@@ -209,6 +216,7 @@ fn siwc_cancel_sign_in(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 fn siwc_switch(app: tauri::AppHandle, state: State<'_, AppState>, client_id: String) -> Result<(), SiwcError> {
     state.siwc.switch_account(&client_id)?;
     notify_siwc_changed(&app, "switched", None);
@@ -216,11 +224,13 @@ fn siwc_switch(app: tauri::AppHandle, state: State<'_, AppState>, client_id: Str
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 fn siwc_ack_welcome(state: State<'_, AppState>) -> Result<(), SiwcError> {
     state.siwc.ack_welcome()
 }
 
 #[tauri::command]
+#[allow(clippy::result_large_err)]
 async fn siwc_sign_out(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<siwc::SignOutResult, SiwcError> {
     let res = state.siwc.sign_out().await?;
     notify_siwc_changed(&app, "signed_out", Some(res.remote_revoked));

@@ -67,7 +67,7 @@ pub fn disk_space() -> Option<DiskSpace> {
         let c = std::ffi::CString::new(path).ok()?;
         let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::statvfs(c.as_ptr(), &mut s) } == 0 {
-            let frsize = s.f_frsize as u64;
+            let frsize = s.f_frsize;
             return Some(DiskSpace { total: s.f_blocks as u64 * frsize, available: s.f_bavail as u64 * frsize });
         }
     }
@@ -350,6 +350,9 @@ pub struct ScanOptions {
     pub limit: usize,
 }
 
+/// (path, size, dir, shared)
+type Measured = (String, u64, bool, bool);
+
 pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn(Progress) + Send + Sync + 'static) -> Result<ScanResult, String> {
     let on_progress = Arc::new(on_progress);
     let roots = mac_roots(&opts.home);
@@ -360,12 +363,11 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
             let start: Vec<String> = roots.iter().map(|r| r.path.clone()).collect();
             collect_units(&start, &roots, &root_paths, true, &mut denied, &cancel, &*on_progress)?
         }
-        Some(folder) => collect_units(&[folder.clone()], &roots, &root_paths, false, &mut denied, &cancel, &*on_progress)?,
+        Some(folder) => collect_units(std::slice::from_ref(folder), &roots, &root_paths, false, &mut denied, &cancel, &*on_progress)?,
     };
 
     let total = units.len();
-    // (path, size, dir, shared)
-    let measured: Arc<Mutex<Vec<(String, u64, bool, bool)>>> = Arc::new(Mutex::new(Vec::with_capacity(total)));
+    let measured: Arc<Mutex<Vec<Measured>>> = Arc::new(Mutex::new(Vec::with_capacity(total)));
     let denied_m = Arc::new(Mutex::new(denied));
     let queue = Arc::new(Mutex::new(units.into_iter().collect::<VecDeque<_>>()));
     let done = Arc::new(AtomicUsize::new(0));
@@ -404,7 +406,7 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
 
     let mut list = std::mem::take(&mut *measured.lock().unwrap());
     list.retain(|(_, size, _, _)| *size >= opts.min_size);
-    list.sort_by(|a, b| b.1.cmp(&a.1));
+    list.sort_by_key(|b| std::cmp::Reverse(b.1));
     list.truncate(opts.limit);
 
     let paths: Vec<String> = list.iter().map(|(p, _, _, _)| p.clone()).collect();
@@ -522,7 +524,7 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             |_| {},
         );
-        let err = res.err().expect("missing folder looked like an empty folder");
+        let err = res.expect_err("missing folder looked like an empty folder");
         assert!(err.contains("/nonexistent/zzz"), "{err}");
     }
 

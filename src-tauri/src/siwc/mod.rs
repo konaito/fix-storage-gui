@@ -177,6 +177,7 @@ impl Siwc {
         })
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn status(&self) -> Result<Status, SiwcError> {
         let host_id = self.store.host_id().map_err(|e| SiwcError::new("storage", e))?;
         if let Some(e) = self.storage_error.lock().unwrap().take() {
@@ -201,6 +202,7 @@ impl Siwc {
         Ok(Status { host_id, active: a.active.clone(), accounts, show_welcome: active_plan && !a.welcome_shown })
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn ack_welcome(&self) -> Result<(), SiwcError> {
         let mut a = self.accounts()?;
         a.welcome_shown = true;
@@ -224,6 +226,7 @@ impl Siwc {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn switch_account(&self, client_id: &str) -> Result<(), SiwcError> {
         let mut a = self.accounts()?;
         if !a.accounts.iter().any(|m| m.client_id == client_id) {
@@ -235,6 +238,7 @@ impl Siwc {
 
     /// Runs the whole browser sign-in. `client_id = None` registers a new client
     /// (`dynamic_agent_client`); otherwise reauthorises that saved registration.
+    #[allow(clippy::result_large_err)]
     pub async fn sign_in(&self, client_id: Option<String>, prompt_consent: bool, open_browser: impl FnOnce(&str) -> Result<(), String>) -> Result<AccountView, SiwcError> {
         let turn = self.begin_sign_in();
         let host_id = self.store.host_id().map_err(|e| SiwcError::new("storage", e))?;
@@ -481,6 +485,7 @@ impl Siwc {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     pub async fn models(&self) -> Result<Vec<api::Model>, SiwcError> {
         let (_, token) = self.access_token(None, None).await?;
         match api::list_models(&self.http, &token).await {
