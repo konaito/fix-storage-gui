@@ -182,7 +182,9 @@ pub enum CallbackRequest {
 pub fn classify_callback(first_line: &str, expected_state: &str) -> CallbackRequest {
     match parse_callback_request(first_line) {
         None => CallbackRequest::Other,
-        Some(q) if q.get("state").map(String::as_str) == Some(expected_state) => CallbackRequest::Done(q),
+        Some(q) if q.get("state").map(String::as_str) == Some(expected_state) => {
+            CallbackRequest::Done(q)
+        }
         Some(_) => CallbackRequest::WrongState,
     }
 }
@@ -191,8 +193,15 @@ const WRONG_STATE_HTML: &str = "<!doctype html><html lang=\"ja\"><meta charset=\
 
 /// Waits (blocking) for the browser to hit the callback with `expected_state`.
 /// Other paths get 404 and callbacks with another state get 400; neither ends the wait.
-pub fn wait_for_callback(listener: TcpListener, cancel: Arc<AtomicBool>, timeout: Duration, expected_state: &str) -> Result<HashMap<String, String>, SiwcError> {
-    listener.set_nonblocking(true).map_err(|e| SiwcError::new("callback_failed", e.to_string()))?;
+pub fn wait_for_callback(
+    listener: TcpListener,
+    cancel: Arc<AtomicBool>,
+    timeout: Duration,
+    expected_state: &str,
+) -> Result<HashMap<String, String>, SiwcError> {
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| SiwcError::new("callback_failed", e.to_string()))?;
     let start = Instant::now();
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -223,7 +232,9 @@ pub fn wait_for_callback(listener: TcpListener, cancel: Arc<AtomicBool>, timeout
                         respond(&mut stream, "200 OK", DONE_HTML);
                         return Ok(q);
                     }
-                    CallbackRequest::WrongState => respond(&mut stream, "400 Bad Request", WRONG_STATE_HTML),
+                    CallbackRequest::WrongState => {
+                        respond(&mut stream, "400 Bad Request", WRONG_STATE_HTML)
+                    }
                     CallbackRequest::Other => respond(&mut stream, "404 Not Found", ""),
                 }
             }
@@ -266,8 +277,16 @@ pub fn oauth_error_code(body: &str) -> Option<String> {
 }
 
 #[allow(clippy::result_large_err)]
-async fn token_request(http: &reqwest::Client, form: &[(&str, &str)]) -> Result<TokenResponse, SiwcError> {
-    let res = http.post(TOKEN_URL).form(form).send().await.map_err(SiwcError::network)?;
+async fn token_request(
+    http: &reqwest::Client,
+    form: &[(&str, &str)],
+) -> Result<TokenResponse, SiwcError> {
+    let res = http
+        .post(TOKEN_URL)
+        .form(form)
+        .send()
+        .await
+        .map_err(SiwcError::network)?;
     let status = res.status().as_u16();
     let body = res.text().await.map_err(SiwcError::network)?;
     if status != 200 {
@@ -289,7 +308,13 @@ async fn token_request(http: &reqwest::Client, form: &[(&str, &str)]) -> Result<
 }
 
 #[allow(clippy::result_large_err)]
-pub async fn exchange_code(http: &reqwest::Client, client_id: &str, code: &str, verifier: &str, redirect_uri: &str) -> Result<TokenResponse, SiwcError> {
+pub async fn exchange_code(
+    http: &reqwest::Client,
+    client_id: &str,
+    code: &str,
+    verifier: &str,
+    redirect_uri: &str,
+) -> Result<TokenResponse, SiwcError> {
     token_request(
         http,
         &[
@@ -306,8 +331,21 @@ pub async fn exchange_code(http: &reqwest::Client, client_id: &str, code: &str, 
 
 /// Refresh without `scope` so the existing grant is kept.
 #[allow(clippy::result_large_err)]
-pub async fn refresh(http: &reqwest::Client, client_id: &str, refresh_token: &str) -> Result<TokenResponse, SiwcError> {
-    token_request(http, &[("grant_type", "refresh_token"), ("client_id", client_id), ("refresh_token", refresh_token), ("resource", RESOURCE)]).await
+pub async fn refresh(
+    http: &reqwest::Client,
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<TokenResponse, SiwcError> {
+    token_request(
+        http,
+        &[
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id),
+            ("refresh_token", refresh_token),
+            ("resource", RESOURCE),
+        ],
+    )
+    .await
 }
 
 /// Revokes the renewable session. Ok(true) when the server confirmed (HTTP 200).
@@ -348,7 +386,12 @@ pub struct IdClaims {
 
 /// Verifies signature (JWKS), issuer, audience (= issued client id), expiry and nonce.
 #[allow(clippy::result_large_err)]
-pub async fn verify_id_token(http: &reqwest::Client, id_token: &str, client_id: &str, nonce: Option<&str>) -> Result<IdClaims, SiwcError> {
+pub async fn verify_id_token(
+    http: &reqwest::Client,
+    id_token: &str,
+    client_id: &str,
+    nonce: Option<&str>,
+) -> Result<IdClaims, SiwcError> {
     use jsonwebtoken::{decode, decode_header, jwk::JwkSet, Algorithm, DecodingKey, Validation};
     let unavailable = || {
         SiwcError::new(
@@ -499,7 +542,9 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let cancel = Arc::new(AtomicBool::new(false));
         let stop = cancel.clone();
-        let waiting = std::thread::spawn(move || wait_for_callback(listener, cancel, Duration::from_secs(5), "good"));
+        let waiting = std::thread::spawn(move || {
+            wait_for_callback(listener, cancel, Duration::from_secs(5), "good")
+        });
         let get = |target: &str| {
             let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
             write!(s, "GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
@@ -523,9 +568,18 @@ mod tests {
     fn callback_state_check() {
         let done = classify_callback("GET /auth/callback?code=c&state=s1 HTTP/1.1", "s1");
         assert!(matches!(done, CallbackRequest::Done(q) if q["code"] == "c"));
-        assert_eq!(classify_callback("GET /auth/callback?code=c&state=s0 HTTP/1.1", "s1"), CallbackRequest::WrongState);
-        assert_eq!(classify_callback("GET /auth/callback?error=access_denied HTTP/1.1", "s1"), CallbackRequest::WrongState);
-        assert_eq!(classify_callback("GET /favicon.ico HTTP/1.1", "s1"), CallbackRequest::Other);
+        assert_eq!(
+            classify_callback("GET /auth/callback?code=c&state=s0 HTTP/1.1", "s1"),
+            CallbackRequest::WrongState
+        );
+        assert_eq!(
+            classify_callback("GET /auth/callback?error=access_denied HTTP/1.1", "s1"),
+            CallbackRequest::WrongState
+        );
+        assert_eq!(
+            classify_callback("GET /favicon.ico HTTP/1.1", "s1"),
+            CallbackRequest::Other
+        );
     }
 
     #[test]

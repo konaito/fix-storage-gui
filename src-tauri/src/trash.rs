@@ -70,13 +70,21 @@ pub fn move_to_trash(
         .enumerate()
         .map(|(i, path)| {
             on_progress(i, total, path);
-            let fail = |e: String| TrashOutcome { path: path.clone(), ok: false, error: Some(e) };
+            let fail = |e: String| TrashOutcome {
+                path: path.clone(),
+                ok: false,
+                error: Some(e),
+            };
             if let Some(why) = guard.check(path) {
                 return fail(format!("保護されているため移動しません: {why}"));
             }
             match trash_target(path) {
                 Some(target) => match move_one(&target) {
-                    Ok(()) => TrashOutcome { path: path.clone(), ok: true, error: None },
+                    Ok(()) => TrashOutcome {
+                        path: path.clone(),
+                        ok: true,
+                        error: None,
+                    },
                     Err(e) => fail(e),
                 },
                 None => fail("見つかりません（もう移動・削除された可能性）".into()),
@@ -103,7 +111,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("real")).unwrap();
         std::os::unix::fs::symlink(d.join("real"), d.join("lnk")).unwrap();
-        let real_dir = std::fs::canonicalize(&d).unwrap().to_string_lossy().to_string();
+        let real_dir = std::fs::canonicalize(&d)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         let t = trash_target(&format!("{}/lnk/", d.to_string_lossy())).unwrap();
         assert_eq!(t, format!("{real_dir}/lnk"));
         assert!(trash_target(&format!("{}/nope", d.to_string_lossy())).is_none());

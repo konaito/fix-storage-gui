@@ -108,13 +108,18 @@ impl Store {
         let path = self.dir.join("accounts.json");
         let text = match fs::read_to_string(&path) {
             Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(AccountsFile::default()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(AccountsFile::default())
+            }
             Err(e) => return Err(format!("アカウント情報（accounts.json）を読めません: {e}")),
         };
         match parse_accounts(&text) {
             Ok(a) => Ok(a),
             Err(why) => {
-                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
                 let aside = self.dir.join(format!("accounts.json.broken-{secs}"));
                 match fs::rename(&path, &aside) {
                     Ok(()) => Err(format!(
@@ -157,7 +162,13 @@ pub(crate) fn parse_accounts(text: &str) -> Result<AccountsFile, String> {
 pub fn keychain_client_ids() -> Result<Vec<String>, String> {
     use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
     const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
-    let found = match ItemSearchOptions::new().class(ItemClass::generic_password()).service(KEYCHAIN_SERVICE).load_attributes(true).limit(Limit::All).search() {
+    let found = match ItemSearchOptions::new()
+        .class(ItemClass::generic_password())
+        .service(KEYCHAIN_SERVICE)
+        .load_attributes(true)
+        .limit(Limit::All)
+        .search()
+    {
         Ok(r) => r,
         Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => return Ok(vec![]),
         Err(e) => return Err(format!("キーチェーンを検索できません: {e}")),
@@ -249,10 +260,17 @@ mod tests {
         let kept = fs::read_dir(&dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().starts_with("accounts.json.broken"))
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("accounts.json.broken")
+            })
             .any(|e| fs::read(e.path()).unwrap() == broken);
         let _ = fs::remove_dir_all(&dir);
-        assert!(kept, "the broken accounts.json must be moved aside with its original bytes");
+        assert!(
+            kept,
+            "the broken accounts.json must be moved aside with its original bytes"
+        );
     }
 
     #[test]
@@ -283,4 +301,3 @@ mod tests {
         assert!(parse_accounts("{").is_err());
     }
 }
-

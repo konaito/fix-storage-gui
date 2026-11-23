@@ -242,7 +242,16 @@ pub async fn respond(
     input: &str,
     on_delta: impl FnMut(usize),
 ) -> Result<String, SiwcError> {
-    respond_to(http, RESPONSES_URL, token, model, instructions, input, on_delta).await
+    respond_to(
+        http,
+        RESPONSES_URL,
+        token,
+        model,
+        instructions,
+        input,
+        on_delta,
+    )
+    .await
 }
 
 /// `respond` against any URL (tests point it at a local server).

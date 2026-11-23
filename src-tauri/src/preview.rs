@@ -229,7 +229,14 @@ fn quicklook(path: &str, gen: u64, alive: &dyn Fn() -> bool) -> Result<Option<St
 
 pub fn preview(path: &str, home: &str, gen: u64, current: Arc<AtomicU64>) -> PreviewResult {
     let alive = || current.load(Ordering::SeqCst) == gen;
-    let mut res = PreviewResult { path: path.to_string(), preview: Preview::None, created_ms: None, modified_ms: None, on_disk: None, apparent: None };
+    let mut res = PreviewResult {
+        path: path.to_string(),
+        preview: Preview::None,
+        created_ms: None,
+        modified_ms: None,
+        on_disk: None,
+        apparent: None,
+    };
     // Protected items get no stat either: dates and sizes would tell that they exist.
     let roots = mac_roots(home);
     if let Some(why) = cannot_remove(path, home, &roots, true) {
@@ -244,7 +251,9 @@ pub fn preview(path: &str, home: &str, gen: u64, current: Arc<AtomicU64>) -> Pre
             return res;
         }
         Err(()) => {
-            res.preview = Preview::Blocked { reason: "実際の場所を確かめられません".into() };
+            res.preview = Preview::Blocked {
+                reason: "実際の場所を確かめられません".into(),
+            };
             return res;
         }
     };
@@ -367,11 +376,19 @@ mod tests {
         let home = tmp("home-link");
         let h = home.to_string_lossy().to_string();
         fs::create_dir_all(home.join(".config/gh")).unwrap();
-        fs::write(home.join(".config/gh/hosts.yml"), b"oauth_token: gho_secret").unwrap();
+        fs::write(
+            home.join(".config/gh/hosts.yml"),
+            b"oauth_token: gho_secret",
+        )
+        .unwrap();
         fs::create_dir_all(home.join("Downloads")).unwrap();
         std::os::unix::fs::symlink(home.join(".config/gh"), home.join("Downloads/g")).unwrap();
         let r = run(&format!("{h}/Downloads/g/hosts.yml"), &h);
-        assert!(matches!(r.preview, Preview::Blocked { .. }), "{:?}", r.preview);
+        assert!(
+            matches!(r.preview, Preview::Blocked { .. }),
+            "{:?}",
+            r.preview
+        );
         let _ = fs::remove_dir_all(&home);
     }
 
@@ -381,10 +398,22 @@ mod tests {
         let h = home.to_string_lossy().to_string();
         fs::create_dir_all(home.join(".ssh")).unwrap();
         fs::write(home.join(".ssh/id_ed25519"), b"PRIVATE KEY").unwrap();
-        for p in [format!("{h}/.ssh/id_ed25519"), format!("{h}/.ssh/nope"), "/etc/hosts".to_string()] {
+        for p in [
+            format!("{h}/.ssh/id_ed25519"),
+            format!("{h}/.ssh/nope"),
+            "/etc/hosts".to_string(),
+        ] {
             let r = run(&p, &h);
-            assert!(matches!(r.preview, Preview::Blocked { .. }), "{p}: {:?}", r.preview);
-            assert_eq!((r.created_ms, r.modified_ms, r.on_disk, r.apparent), (None, None, None, None), "{p}");
+            assert!(
+                matches!(r.preview, Preview::Blocked { .. }),
+                "{p}: {:?}",
+                r.preview
+            );
+            assert_eq!(
+                (r.created_ms, r.modified_ms, r.on_disk, r.apparent),
+                (None, None, None, None),
+                "{p}"
+            );
         }
         let _ = fs::remove_dir_all(&home);
     }
