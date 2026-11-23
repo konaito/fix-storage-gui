@@ -27,7 +27,7 @@ import { formatBytes } from "./lib/format";
 import { aiSendTargets, forDisplay, toRow, withAi, type Row } from "./lib/rows";
 import { selectable } from "./safety/merge";
 import { UpdateCheckButton } from "./components/UpdateBanner";
-import { setUpdateBlocked } from "./lib/updater";
+import { getUpdateState, setUpdateBlocked, updateBlocksWork, useUpdateState } from "./lib/updater";
 
 const PROVIDER: JudgeProvider = chatGptProvider;
 const BATCH = 25;
@@ -51,6 +51,13 @@ export default function App() {
   // With a scan result, a token that stops working keeps this screen under a sign-in-again bar (#75).
   useEffect(() => reportApp(flow.hasScan || !!flow.busy, busyLabel), [reportApp, flow.hasScan, flow.busy, busyLabel]);
   useEffect(() => () => reportApp(false, null), [reportApp]);
+  // 逆に、更新のダウンロードから再起動までの間は、スキャン・AI 判定・ゴミ箱移動を始めない（#22）。
+  const updateBusy = updateBlocksWork(useUpdateState().phase);
+  function blockedByUpdate(): boolean {
+    if (!updateBlocksWork(getUpdateState().phase)) return false;
+    setNotice("アップデートのダウンロードとインストールが終わるまで、スキャン・AI 判定・ゴミ箱への移動は始められません。");
+    return true;
+  }
 
   const [target, setTarget] = useState<Target>({ kind: "mac" });
   const [lastFolder, setLastFolder] = useState<string | null>(null);
@@ -185,7 +192,7 @@ export default function App() {
   }
 
   async function runScan(t: Target, pushHistory: boolean) {
-    if (flow.busy) return;
+    if (flow.busy || blockedByUpdate()) return;
     setError(null);
     setNotice(null);
     setProgress(null);
@@ -229,7 +236,7 @@ export default function App() {
 
   function goUp() {
     const prev = history[history.length - 1];
-    if (!prev) return;
+    if (!prev || blockedByUpdate()) return;
     setHistory((h) => h.slice(0, -1));
     void runScan(prev, false);
   }
@@ -238,7 +245,7 @@ export default function App() {
     setAiDialog(false);
     // Every batch of this run goes to the account it started with (#28).
     const clientId = status?.active;
-    if (!env || !model || flow.busy || !planReady || !clientId) return;
+    if (!env || !model || flow.busy || !planReady || !clientId || blockedByUpdate()) return;
     const maskOpts = { enabled: mask, home: env.home, user: env.user };
     const indexed = aiQueue.map((r, i) => ({ id: `i${i}`, row: r }));
     if (indexed.length === 0) return;
@@ -320,11 +327,11 @@ export default function App() {
 
   // Open the send dialog by itself once the AI step is up and a model is ready.
   useEffect(() => {
-    if (autoAi && flow.step === "ai" && !flow.busy && !flow.ruleOnly && planReady && !!model && !!env && aiTargets.length > 0) {
+    if (autoAi && flow.step === "ai" && !flow.busy && !updateBusy && !flow.ruleOnly && planReady && !!model && !!env && aiTargets.length > 0) {
       setAutoAi(false);
       setAiDialog(true);
     }
-  }, [autoAi, flow.step, flow.busy, flow.ruleOnly, planReady, model, env, aiTargets.length]);
+  }, [autoAi, flow.step, flow.busy, updateBusy, flow.ruleOnly, planReady, model, env, aiTargets.length]);
 
   /** "AI なしで一覧へ": this list only shows the rules' verdict for items the AI has not judged (#26). */
   function skipAi() {
@@ -344,7 +351,7 @@ export default function App() {
   const chosen = view.filter((r) => selected.has(r.path) && selectable(r.final));
 
   async function doTrash() {
-    if (chosen.length === 0) return;
+    if (chosen.length === 0 || blockedByUpdate()) return;
     const sizeOf = new Map(chosen.map((r) => [r.path, r.size]));
     setTrashProgress(null);
     setTrashError(null);
@@ -397,6 +404,7 @@ export default function App() {
           minSize={minSize}
           onMinSize={setMinSize}
           onStart={() => {
+            if (blockedByUpdate()) return;
             setHistory([]);
             void runScan(target, false);
           }}
@@ -439,6 +447,7 @@ export default function App() {
           canGoUp={history.length > 0}
           onGoUp={goUp}
           onDrill={(path) => {
+            if (blockedByUpdate()) return;
             setTarget({ kind: "folder", path });
             void runScan({ kind: "folder", path }, true);
           }}
