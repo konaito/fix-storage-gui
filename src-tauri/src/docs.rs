@@ -3,7 +3,9 @@
 
 /// True for `https://developers.openai.com/siwc` and pages under it (no credentials, no other host).
 pub fn is_official_siwc_doc(raw: &str) -> bool {
-    let Ok(u) = url::Url::parse(raw) else { return false };
+    let Ok(u) = url::Url::parse(raw) else {
+        return false;
+    };
     u.scheme() == "https"
         && u.host_str() == Some("developers.openai.com")
         && u.port().is_none()
@@ -20,7 +22,9 @@ mod tests {
     fn allows_only_official_siwc_pages() {
         assert!(ok("https://developers.openai.com/siwc"));
         assert!(ok("https://developers.openai.com/siwc/ui-ux-guidelines"));
-        assert!(ok("https://developers.openai.com/siwc/token-sharing-open-source/sign-in"));
+        assert!(ok(
+            "https://developers.openai.com/siwc/token-sharing-open-source/sign-in"
+        ));
         assert!(!ok("http://developers.openai.com/siwc"));
         assert!(!ok("https://developers.openai.com/api"));
         assert!(!ok("https://developers.openai.com/siwcx"));

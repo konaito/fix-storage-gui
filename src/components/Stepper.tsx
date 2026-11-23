@@ -1,3 +1,4 @@
+import { stepAriaLabel } from "../flow/a11y";
 import { stepStatus, stepsFor, type FlowState, type StepId } from "../flow/steps";
 
 interface Props {
@@ -16,12 +17,13 @@ export function Stepper({ flow, canGo, onGo }: Props) {
           const clickable = st !== "current" && canGo(s.id);
           const busyHere = st === "current" && flow.busy !== null;
           return (
-            <li key={s.id} className={`step ${st}${clickable ? " clickable" : ""}`} aria-current={st === "current" ? "step" : undefined}>
+            <li key={s.id} className={`step ${st}${clickable ? " clickable" : ""}`}>
               <button
                 type="button"
                 disabled={!clickable}
                 onClick={() => onGo(s.id)}
-                aria-label={s.label}
+                aria-current={st === "current" ? "step" : undefined}
+                aria-label={stepAriaLabel(s.label, st, s.id === "ai" && !flow.aiFirst, busyHere)}
                 title={clickable ? `「${s.label}」に戻る` : s.label}
               >
                 <span className="dot" aria-hidden="true">
@@ -30,7 +32,7 @@ export function Stepper({ flow, canGo, onGo }: Props) {
                 <span className="step-label" aria-hidden="true">
                   <span className="step-label-full">{s.label}</span>
                   <span className="step-label-short">{s.shortLabel}</span>
-                  {s.id === "ai" && !flow.aiFirst && <span className="opt">{st === "skipped" ? "スキップ" : "任意"}</span>}
+                  {s.id === "ai" && (!flow.aiFirst || st === "skipped") && <span className="opt">{st === "skipped" ? "スキップ" : "任意"}</span>}
                 </span>
               </button>
             </li>

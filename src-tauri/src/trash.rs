@@ -17,12 +17,19 @@ pub struct TrashOutcome {
 }
 
 fn run(file: &str, args: &[&str]) -> Result<(), String> {
-    let out = Command::new(file).args(args).output().map_err(|e| e.to_string())?;
+    let out = Command::new(file)
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
     if out.status.success() {
         Ok(())
     } else {
         let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        Err(if err.is_empty() { format!("{file} が失敗しました ({})", out.status) } else { err })
+        Err(if err.is_empty() {
+            format!("{file} が失敗しました ({})", out.status)
+        } else {
+            err
+        })
     }
 }
 
@@ -33,7 +40,15 @@ fn move_one(path: &str) -> Result<(), String> {
         }
         return run(
             "osascript",
-            &["-e", "on run argv", "-e", "tell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)", "-e", "end run", path],
+            &[
+                "-e",
+                "on run argv",
+                "-e",
+                "tell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)",
+                "-e",
+                "end run",
+                path,
+            ],
         );
     }
     let _ = path;
@@ -42,7 +57,11 @@ fn move_one(path: &str) -> Result<(), String> {
 
 /// Re-checks the hard block list for every path right before moving it.
 /// `on_progress(done, total, current)` is called before each item.
-pub fn move_to_trash(paths: &[String], home: &str, on_progress: impl Fn(usize, usize, &str)) -> Vec<TrashOutcome> {
+pub fn move_to_trash(
+    paths: &[String],
+    home: &str,
+    on_progress: impl Fn(usize, usize, &str),
+) -> Vec<TrashOutcome> {
     move_to_trash_with(paths, home, on_progress, move_one)
 }
 
@@ -62,13 +81,21 @@ fn move_to_trash_with(
         .enumerate()
         .map(|(i, path)| {
             on_progress(i, total, path);
-            let fail = |e: String| TrashOutcome { path: path.clone(), ok: false, error: Some(e) };
+            let fail = |e: String| TrashOutcome {
+                path: path.clone(),
+                ok: false,
+                error: Some(e),
+            };
             if let Some(why) = guard.check(path) {
                 return fail(format!("保護されているため移動しません: {why}"));
             }
             match trash_target(path) {
                 Some(target) => match mover(&target) {
-                    Ok(()) => TrashOutcome { path: path.clone(), ok: true, error: None },
+                    Ok(()) => TrashOutcome {
+                        path: path.clone(),
+                        ok: true,
+                        error: None,
+                    },
                     Err(e) => fail(e),
                 },
                 None => fail("見つかりません（もう移動・削除された可能性）".into()),
@@ -95,7 +122,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("real")).unwrap();
         std::os::unix::fs::symlink(d.join("real"), d.join("lnk")).unwrap();
-        let real_dir = std::fs::canonicalize(&d).unwrap().to_string_lossy().to_string();
+        let real_dir = std::fs::canonicalize(&d)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         let t = trash_target(&format!("{}/lnk/", d.to_string_lossy())).unwrap();
         assert_eq!(t, format!("{real_dir}/lnk"));
         assert!(trash_target(&format!("{}/nope", d.to_string_lossy())).is_none());
@@ -133,17 +163,33 @@ mod tests {
         paths.push(format!("{h}/Downloads/ok.txt"));
 
         let moved = RefCell::new(Vec::<String>::new());
-        let out = move_to_trash_with(&paths, &h, |_, _, _| {}, |p| {
-            moved.borrow_mut().push(p.to_string());
-            Ok(())
-        });
+        let out = move_to_trash_with(
+            &paths,
+            &h,
+            |_, _, _| {},
+            |p| {
+                moved.borrow_mut().push(p.to_string());
+                Ok(())
+            },
+        );
 
         let moved = moved.into_inner();
-        assert_eq!(moved.len(), 1, "only the ordinary file may reach the mover: {moved:?}");
+        assert_eq!(
+            moved.len(),
+            1,
+            "only the ordinary file may reach the mover: {moved:?}"
+        );
         assert!(moved[0].ends_with("/Downloads/ok.txt"));
         for (o, rel) in out.iter().zip(protected) {
             assert!(!o.ok, "{rel} was moved");
-            assert!(o.error.as_deref().unwrap_or("").starts_with("保護されているため移動しません"), "{rel}: {:?}", o.error);
+            assert!(
+                o.error
+                    .as_deref()
+                    .unwrap_or("")
+                    .starts_with("保護されているため移動しません"),
+                "{rel}: {:?}",
+                o.error
+            );
             assert!(d.join(rel).exists());
         }
         assert!(out.last().unwrap().ok);

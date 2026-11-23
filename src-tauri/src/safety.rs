@@ -38,7 +38,9 @@ pub fn home_ok(home: &str) -> bool {
 /// as is (a symlink at the end is the item itself and is not followed).
 /// Ok(None) when the parent folder does not exist; Err for other failures (permission, loops).
 pub fn real_path(path: &str) -> Result<Option<String>, ()> {
-    let Some(target) = normalize(path) else { return Err(()) };
+    let Some(target) = normalize(path) else {
+        return Err(());
+    };
     if target == "/" {
         return Ok(Some(target));
     }
@@ -67,34 +69,31 @@ fn within(path: &str, dir: &str) -> bool {
 fn protected_paths(home: &str, roots: &[Root]) -> Vec<String> {
     let lib = |name: &str| format!("{home}/Library/{name}");
     let mut v: Vec<String> = roots.iter().map(|r| r.path.clone()).collect();
-    v.extend(
-        [
-            "/".to_string(),
-            home.to_string(),
-            "/System".into(),
-            "/Library".into(),
-            "/usr".into(),
-            "/usr/local/bin".into(),
-            "/usr/local/lib".into(),
-            "/opt/homebrew/bin".into(),
-            "/opt/homebrew/lib".into(),
-            "/Users".into(),
-            "/Applications".into(),
-            "/Volumes".into(),
-            format!("{home}/Library"),
-            lib("Keychains"),
-            lib("Preferences"),
-            lib("Mail"),
-            lib("Messages"),
-            lib("Accounts"),
-            lib("Cookies"),
-            lib("Calendars"),
-            lib("Safari"),
-            lib("Photos"),
-            lib("Biome"),
-        ]
-        .into_iter(),
-    );
+    v.extend([
+        "/".to_string(),
+        home.to_string(),
+        "/System".into(),
+        "/Library".into(),
+        "/usr".into(),
+        "/usr/local/bin".into(),
+        "/usr/local/lib".into(),
+        "/opt/homebrew/bin".into(),
+        "/opt/homebrew/lib".into(),
+        "/Users".into(),
+        "/Applications".into(),
+        "/Volumes".into(),
+        format!("{home}/Library"),
+        lib("Keychains"),
+        lib("Preferences"),
+        lib("Mail"),
+        lib("Messages"),
+        lib("Accounts"),
+        lib("Cookies"),
+        lib("Calendars"),
+        lib("Safari"),
+        lib("Photos"),
+        lib("Biome"),
+    ]);
     v
 }
 
@@ -107,7 +106,10 @@ fn blocked_trees(home: &str) -> Vec<(String, &'static str)> {
         ("/usr".into(), "macOS が管理しています"),
         ("/bin".into(), "macOS が管理しています"),
         ("/sbin".into(), "macOS が管理しています"),
-        ("/Library/Keychains".into(), "キーチェーン（パスワードや証明書）"),
+        (
+            "/Library/Keychains".into(),
+            "キーチェーン（パスワードや証明書）",
+        ),
         (h("Library/Keychains"), "キーチェーン（パスワードや証明書）"),
         (h("Library/Accounts"), "アカウント情報"),
         (h("Library/Mail"), "メールのデータ"),
@@ -132,7 +134,11 @@ fn blocked_trees(home: &str) -> Vec<(String, &'static str)> {
 /// Names that usually hold private keys or secrets.
 pub(crate) fn secret_name(name: &str) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
-    if lower.starts_with("id_rsa") || lower.starts_with("id_ed25519") || lower.starts_with("id_ecdsa") || lower.starts_with("id_dsa") {
+    if lower.starts_with("id_rsa")
+        || lower.starts_with("id_ed25519")
+        || lower.starts_with("id_ecdsa")
+        || lower.starts_with("id_dsa")
+    {
         return Some("SSH の秘密鍵");
     }
     if lower == ".env" || lower.starts_with(".env.") {
@@ -158,7 +164,8 @@ pub(crate) fn secret_name(name: &str) -> Option<&'static str> {
 
 /// `dir` appears in `path` as a whole folder: followed by "/" or the end.
 fn has_dir(path: &str, dir: &str) -> bool {
-    path.match_indices(dir).any(|(i, _)| matches!(path.as_bytes().get(i + dir.len()), None | Some(b'/')))
+    path.match_indices(dir)
+        .any(|(i, _)| matches!(path.as_bytes().get(i + dir.len()), None | Some(b'/')))
 }
 
 /// Things a tool owns; removing them by hand breaks the tool. The same rules that make
@@ -172,7 +179,10 @@ fn tool_managed(lower: &str) -> Option<&'static str> {
     if lower.contains("/.ollama/models") {
         return Some("ローカル AI のモデル（ollama rm で消す）");
     }
-    if lower.starts_with("/opt/homebrew") || lower.starts_with("/usr/local/cellar") || lower.starts_with("/home/linuxbrew/") {
+    if lower.starts_with("/opt/homebrew")
+        || lower.starts_with("/usr/local/cellar")
+        || lower.starts_with("/home/linuxbrew/")
+    {
         return Some("Homebrew が管理しています（brew cleanup で古い版を消す）");
     }
     let var_lib = |tool: &str| same_or_within(lower, &format!("/var/lib/{tool}"));
@@ -206,8 +216,14 @@ impl Rules {
     fn new(home: &str, protected: Vec<String>, trees: Vec<(String, &'static str)>) -> Self {
         Rules {
             home: home.to_ascii_lowercase(),
-            protected: protected.into_iter().map(|p| p.to_ascii_lowercase()).collect(),
-            trees: trees.into_iter().map(|(p, why)| (p.to_ascii_lowercase(), why)).collect(),
+            protected: protected
+                .into_iter()
+                .map(|p| p.to_ascii_lowercase())
+                .collect(),
+            trees: trees
+                .into_iter()
+                .map(|(p, why)| (p.to_ascii_lowercase(), why))
+                .collect(),
         }
     }
 
@@ -285,7 +301,10 @@ fn holds_git_repo(dir: &Path, skip: impl Fn(&str) -> bool) -> bool {
     let mut level = vec![dir.to_path_buf()];
     let mut seen = 0usize;
     for depth in 0..=GIT_SEARCH_DEPTH {
-        if level.iter().any(|d| d.join(".git").symlink_metadata().is_ok()) {
+        if level
+            .iter()
+            .any(|d| d.join(".git").symlink_metadata().is_ok())
+        {
             return true;
         }
         if depth == GIT_SEARCH_DEPTH {
@@ -293,7 +312,9 @@ fn holds_git_repo(dir: &Path, skip: impl Fn(&str) -> bool) -> bool {
         }
         let mut next = Vec::new();
         for d in &level {
-            let Ok(entries) = std::fs::read_dir(d) else { continue };
+            let Ok(entries) = std::fs::read_dir(d) else {
+                continue;
+            };
             for e in entries.flatten() {
                 seen += 1;
                 if seen > GIT_SEARCH_ENTRIES {
@@ -322,7 +343,11 @@ impl Guard {
         let protected = protected_paths(h, roots);
         let trees = blocked_trees(h);
         if !home_ok(h) {
-            return Guard { home: None, rules: Rules::new(h, protected, trees), real: None };
+            return Guard {
+                home: None,
+                rules: Rules::new(h, protected, trees),
+                real: None,
+            };
         }
         let real = if check_fs {
             let real_home = std::fs::canonicalize(h)
@@ -331,22 +356,40 @@ impl Guard {
                 .filter(|s| home_ok(s))
                 .unwrap_or_else(|| h.to_string());
             let to_home = |p: &str| to_home_ns(p, &real_home, h);
-            let resolve = |p: &str| std::fs::canonicalize(p).ok().and_then(|r| r.to_str().map(|r| to_home(r)));
+            let resolve = |p: &str| {
+                std::fs::canonicalize(p)
+                    .ok()
+                    .and_then(|r| r.to_str().map(to_home))
+            };
             let mut real_protected = protected.clone();
             real_protected.extend(protected.iter().filter_map(|p| resolve(p)));
             let mut real_trees = trees.clone();
-            real_trees.extend(trees.iter().filter_map(|(p, why)| resolve(p).map(|r| (r, *why))));
-            let rebuilt_roots = roots.iter().filter(|r| matches!(r.category, CategoryId::Caches | CategoryId::Trash));
+            real_trees.extend(
+                trees
+                    .iter()
+                    .filter_map(|(p, why)| resolve(p).map(|r| (r, *why))),
+            );
+            let rebuilt_roots = roots
+                .iter()
+                .filter(|r| matches!(r.category, CategoryId::Caches | CategoryId::Trash));
             let mut rebuilt: Vec<String> = Vec::new();
             for r in rebuilt_roots {
                 rebuilt.push(r.path.to_ascii_lowercase());
                 rebuilt.extend(resolve(&r.path).map(|p| p.to_ascii_lowercase()));
             }
-            Some(RealRules { rules: Rules::new(h, real_protected, real_trees), home: real_home, rebuilt })
+            Some(RealRules {
+                rules: Rules::new(h, real_protected, real_trees),
+                home: real_home,
+                rebuilt,
+            })
         } else {
             None
         };
-        Guard { home: Some(h.to_string()), rules: Rules::new(h, protected, trees), real }
+        Guard {
+            home: Some(h.to_string()),
+            rules: Rules::new(h, protected, trees),
+            real,
+        }
     }
 
     /// Why `path` must never be moved to the Trash, or None when it may be.
@@ -382,7 +425,9 @@ impl Guard {
             // A link is moved by itself, never what it points to, so only real folders are searched.
             let real_dir = std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
             if real_dir && !real.rebuilt(&resolved) && holds_git_repo(p, |s| real.rebuilt(s)) {
-                return Some("Git リポジトリを含むフォルダ（未 push の変更が失われるおそれ）".into());
+                return Some(
+                    "Git リポジトリを含むフォルダ（未 push の変更が失われるおそれ）".into(),
+                );
             }
         }
         None
@@ -425,7 +470,10 @@ mod tests {
         assert!(check("/").is_some());
         assert!(check("/Users/a").is_some());
         assert!(check("/Users/a/Library").is_some());
-        assert!(check("/Users/a/Library/Caches").is_some(), "roots themselves are protected");
+        assert!(
+            check("/Users/a/Library/Caches").is_some(),
+            "roots themselves are protected"
+        );
         assert!(check("/System/Library/Fonts").is_some());
         assert!(check("/Users/a/Library/Keychains/login.keychain-db").is_some());
         assert!(check("/Users/a/.ssh/id_ed25519").is_some());
@@ -465,8 +513,17 @@ mod tests {
     fn empty_or_root_home_blocks_everything() {
         for home in ["", "/", "//", "relative"] {
             let roots = mac_roots(home);
-            for p in ["/etc/hosts", "/opt/homebrew/Cellar/x", "/Library/LaunchDaemons/x.plist", "/var/db/x", "/Users/a/Downloads/x.dmg"] {
-                assert!(cannot_remove(p, home, &roots, false).is_some(), "home={home:?} path={p}");
+            for p in [
+                "/etc/hosts",
+                "/opt/homebrew/Cellar/x",
+                "/Library/LaunchDaemons/x.plist",
+                "/var/db/x",
+                "/Users/a/Downloads/x.dmg",
+            ] {
+                assert!(
+                    cannot_remove(p, home, &roots, false).is_some(),
+                    "home={home:?} path={p}"
+                );
             }
         }
     }
@@ -501,13 +558,29 @@ mod tests {
         std::fs::create_dir_all(d.join("media/movies")).unwrap();
         symlink(d.join("media/movies"), d.join("Movies")).unwrap();
 
-        assert!(c(format!("{h}/Downloads/lnk/config")).is_some(), "through a linked parent");
-        assert!(c(format!("{h}/Downloads/lnk/")).is_none(), "the link itself is an ordinary item");
-        assert!(c(format!("{h}/dotfiles/gh/hosts.yml")).is_some(), "real place of a protected folder");
+        assert!(
+            c(format!("{h}/Downloads/lnk/config")).is_some(),
+            "through a linked parent"
+        );
+        assert!(
+            c(format!("{h}/Downloads/lnk/")).is_none(),
+            "the link itself is an ordinary item"
+        );
+        assert!(
+            c(format!("{h}/dotfiles/gh/hosts.yml")).is_some(),
+            "real place of a protected folder"
+        );
         assert!(c(format!("{h}/dotfiles/gh")).is_some());
-        assert!(c(format!("{h}/media/movies")).is_some(), "real place of a root");
+        assert!(
+            c(format!("{h}/media/movies")).is_some(),
+            "real place of a root"
+        );
         // Ordinary items in a home under /var (-> /private/var) must stay allowed.
-        assert!(c(format!("{h}/Downloads/ok.txt")).is_none(), "{:?}", c(format!("{h}/Downloads/ok.txt")));
+        assert!(
+            c(format!("{h}/Downloads/ok.txt")).is_none(),
+            "{:?}",
+            c(format!("{h}/Downloads/ok.txt"))
+        );
         assert!(c(format!("{h}/media/movies/clip.mov")).is_none());
         let _ = std::fs::remove_dir_all(&d);
     }
@@ -519,7 +592,12 @@ mod tests {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../test/fixtures/tool-managed.json")).unwrap();
         let paths = |key: &str| -> Vec<String> {
-            fixture[key].as_array().unwrap().iter().map(|e| e["path"].as_str().unwrap().to_string()).collect()
+            fixture[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["path"].as_str().unwrap().to_string())
+                .collect()
         };
         let system = paths("system");
         let not_system = paths("notSystem");
@@ -559,17 +637,32 @@ mod tests {
         // caches are rebuilt by the tools that own them, so they are not searched
         mk(".cache/pre-commit/repoX/.git");
 
-        assert!(c(format!("{h}/work/repoA")).is_some(), "the repository itself");
+        assert!(
+            c(format!("{h}/work/repoA")).is_some(),
+            "the repository itself"
+        );
         assert!(c(format!("{h}/work")).is_some(), "parent of a repository");
-        assert!(c(format!("{h}/deep")).is_some(), "repository 3 levels below");
-        assert!(c(format!("{h}/deeper")).is_none(), "repository 4 levels below is past the limit");
+        assert!(
+            c(format!("{h}/deep")).is_some(),
+            "repository 3 levels below"
+        );
+        assert!(
+            c(format!("{h}/deeper")).is_none(),
+            "repository 4 levels below is past the limit"
+        );
         assert!(c(format!("{h}/wt")).is_some(), ".git file");
         assert!(c(format!("{h}/upper")).is_some(), ".GIT in another case");
         assert!(c(format!("{h}/plain")).is_none(), "no repository inside");
         assert!(c(format!("{h}/links")).is_none(), "links are not followed");
         symlink(d.join("work"), d.join("worklink")).unwrap();
-        assert!(c(format!("{h}/worklink")).is_none(), "an item that is a link is not searched");
-        assert!(c(format!("{h}/.cache/pre-commit")).is_none(), "caches are not searched");
+        assert!(
+            c(format!("{h}/worklink")).is_none(),
+            "an item that is a link is not searched"
+        );
+        assert!(
+            c(format!("{h}/.cache/pre-commit")).is_none(),
+            "caches are not searched"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -586,7 +679,10 @@ mod tests {
             }
         }
         std::fs::create_dir_all(d.join("stuff/repo/.git")).unwrap();
-        assert!(c(format!("{h}/stuff")).is_some(), "repository next to big folders");
+        assert!(
+            c(format!("{h}/stuff")).is_some(),
+            "repository next to big folders"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

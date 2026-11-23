@@ -21,7 +21,8 @@ pub const ISSUER: &str = "https://auth.openai.com";
 pub const AUTHORIZE_URL: &str = "https://auth.openai.com/api/accounts/authorize";
 pub const TOKEN_URL: &str = "https://auth.openai.com/api/accounts/oauth/token";
 pub const RESOURCE: &str = "https://api.openai.com/v1";
-pub const SCOPES: &str = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
+pub const SCOPES: &str =
+    "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
 pub const PLAN_SCOPE: &str = "chatgpt.tokens.use.direct";
 pub const DYNAMIC_CLIENT: &str = "dynamic_agent_client";
 pub const AGENT_NAME: &str = "Fix Storage GUI";
@@ -46,12 +47,32 @@ pub struct Discovery {
     pub revocation_endpoint: Option<String>,
 }
 
+#[allow(clippy::result_large_err)]
 pub async fn discovery(http: &reqwest::Client) -> Result<Discovery, SiwcError> {
-    let res = http.get(format!("{ISSUER}/.well-known/openid-configuration")).send().await.map_err(SiwcError::network)?;
-    let d: Discovery = res.json().await.map_err(|_| SiwcError::new("discovery_failed", "サインイン設定を確認できませんでした"))?;
-    let ok_origin = |u: &str| url::Url::parse(u).map(|u| u.origin().ascii_serialization() == ISSUER).unwrap_or(false);
-    if d.issuer != ISSUER || !ok_origin(&d.jwks_uri) || d.revocation_endpoint.as_deref().is_some_and(|r| !ok_origin(r)) {
-        return Err(SiwcError::new("discovery_failed", "サインイン設定を確認できませんでした"));
+    let res = http
+        .get(format!("{ISSUER}/.well-known/openid-configuration"))
+        .send()
+        .await
+        .map_err(SiwcError::network)?;
+    let d: Discovery = res
+        .json()
+        .await
+        .map_err(|_| SiwcError::new("discovery_failed", "サインイン設定を確認できませんでした"))?;
+    let ok_origin = |u: &str| {
+        url::Url::parse(u)
+            .map(|u| u.origin().ascii_serialization() == ISSUER)
+            .unwrap_or(false)
+    };
+    if d.issuer != ISSUER
+        || !ok_origin(&d.jwks_uri)
+        || d.revocation_endpoint
+            .as_deref()
+            .is_some_and(|r| !ok_origin(r))
+    {
+        return Err(SiwcError::new(
+            "discovery_failed",
+            "サインイン設定を確認できませんでした",
+        ));
     }
     Ok(d)
 }
@@ -105,11 +126,20 @@ pub fn authorize_url(r: &AuthRequest) -> String {
 }
 
 /// Binds the loopback listener: 127.0.0.1:1455 if free, otherwise any free port (only the port may vary).
+#[allow(clippy::result_large_err)]
 pub fn bind_loopback() -> Result<(TcpListener, String), SiwcError> {
     let listener = TcpListener::bind(("127.0.0.1", PREFERRED_PORT))
         .or_else(|_| TcpListener::bind(("127.0.0.1", 0)))
-        .map_err(|e| SiwcError::new("callback_failed", format!("ローカルの受け口を開けません: {e}")))?;
-    let port = listener.local_addr().map_err(|e| SiwcError::new("callback_failed", e.to_string()))?.port();
+        .map_err(|e| {
+            SiwcError::new(
+                "callback_failed",
+                format!("ローカルの受け口を開けません: {e}"),
+            )
+        })?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| SiwcError::new("callback_failed", e.to_string()))?
+        .port();
     Ok((listener, format!("http://127.0.0.1:{port}{CALLBACK_PATH}")))
 }
 
@@ -137,16 +167,51 @@ pub fn parse_callback_request(first_line: &str) -> Option<HashMap<String, String
     Some(u.query_pairs().into_owned().collect())
 }
 
-/// Waits (blocking) for the browser to hit the callback. Ignores other paths such as /favicon.ico.
-pub fn wait_for_callback(listener: TcpListener, cancel: Arc<AtomicBool>, timeout: Duration) -> Result<HashMap<String, String>, SiwcError> {
-    listener.set_nonblocking(true).map_err(|e| SiwcError::new("callback_failed", e.to_string()))?;
+/// What one request to the loopback listener is.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CallbackRequest {
+    /// Another path (e.g. /favicon.ico): 404, keep waiting.
+    Other,
+    /// The callback path, but not with this sign-in's `state` (an old tab, an `<img>` on any page):
+    /// 400, keep waiting (#30).
+    WrongState,
+    /// This sign-in's callback.
+    Done(HashMap<String, String>),
+}
+
+pub fn classify_callback(first_line: &str, expected_state: &str) -> CallbackRequest {
+    match parse_callback_request(first_line) {
+        None => CallbackRequest::Other,
+        Some(q) if q.get("state").map(String::as_str) == Some(expected_state) => {
+            CallbackRequest::Done(q)
+        }
+        Some(_) => CallbackRequest::WrongState,
+    }
+}
+
+const WRONG_STATE_HTML: &str = "<!doctype html><html lang=\"ja\"><meta charset=\"utf-8\"><title>Fix Storage GUI</title><body style=\"font-family:-apple-system,sans-serif;padding:40px\"><h2>このサインインの応答ではありません</h2><p>Fix Storage GUI で始めたサインインのタブから続けてください。</p></body></html>";
+
+/// Waits (blocking) for the browser to hit the callback with `expected_state`.
+/// Other paths get 404 and callbacks with another state get 400; neither ends the wait.
+pub fn wait_for_callback(
+    listener: TcpListener,
+    cancel: Arc<AtomicBool>,
+    timeout: Duration,
+    expected_state: &str,
+) -> Result<HashMap<String, String>, SiwcError> {
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| SiwcError::new("callback_failed", e.to_string()))?;
     let start = Instant::now();
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(SiwcError::new("cancelled", "サインインを中止しました"));
         }
         if start.elapsed() > timeout {
-            return Err(SiwcError::new("timeout", "サインインが時間内に完了しませんでした"));
+            return Err(SiwcError::new(
+                "timeout",
+                "サインインが時間内に完了しませんでした",
+            ));
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
@@ -162,15 +227,20 @@ pub fn wait_for_callback(listener: TcpListener, cancel: Arc<AtomicBool>, timeout
                 }
                 let text = String::from_utf8_lossy(&buf);
                 let first = text.lines().next().unwrap_or("");
-                match parse_callback_request(first) {
-                    Some(q) => {
+                match classify_callback(first, expected_state) {
+                    CallbackRequest::Done(q) => {
                         respond(&mut stream, "200 OK", DONE_HTML);
                         return Ok(q);
                     }
-                    None => respond(&mut stream, "404 Not Found", ""),
+                    CallbackRequest::WrongState => {
+                        respond(&mut stream, "400 Bad Request", WRONG_STATE_HTML)
+                    }
+                    CallbackRequest::Other => respond(&mut stream, "404 Not Found", ""),
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(100))
+            }
             Err(e) => return Err(SiwcError::new("callback_failed", e.to_string())),
         }
     }
@@ -206,8 +276,17 @@ pub fn oauth_error_code(body: &str) -> Option<String> {
     }
 }
 
-async fn token_request(http: &reqwest::Client, form: &[(&str, &str)]) -> Result<TokenResponse, SiwcError> {
-    let res = http.post(TOKEN_URL).form(form).send().await.map_err(SiwcError::network)?;
+#[allow(clippy::result_large_err)]
+async fn token_request(
+    http: &reqwest::Client,
+    form: &[(&str, &str)],
+) -> Result<TokenResponse, SiwcError> {
+    let res = http
+        .post(TOKEN_URL)
+        .form(form)
+        .send()
+        .await
+        .map_err(SiwcError::network)?;
     let status = res.status().as_u16();
     let body = res.text().await.map_err(SiwcError::network)?;
     if status != 200 {
@@ -217,12 +296,25 @@ async fn token_request(http: &reqwest::Client, form: &[(&str, &str)]) -> Result<
             Some("invalid_client") => "invalid_client",
             _ => "token_failed",
         };
-        return Err(SiwcError::new(kind, format!("トークンの取得に失敗しました (HTTP {status})")).with_code(code).with_status(status));
+        return Err(SiwcError::new(
+            kind,
+            format!("トークンの取得に失敗しました (HTTP {status})"),
+        )
+        .with_code(code)
+        .with_status(status));
     }
-    serde_json::from_str(&body).map_err(|_| SiwcError::new("token_failed", "トークン応答を読めませんでした"))
+    serde_json::from_str(&body)
+        .map_err(|_| SiwcError::new("token_failed", "トークン応答を読めませんでした"))
 }
 
-pub async fn exchange_code(http: &reqwest::Client, client_id: &str, code: &str, verifier: &str, redirect_uri: &str) -> Result<TokenResponse, SiwcError> {
+#[allow(clippy::result_large_err)]
+pub async fn exchange_code(
+    http: &reqwest::Client,
+    client_id: &str,
+    code: &str,
+    verifier: &str,
+    redirect_uri: &str,
+) -> Result<TokenResponse, SiwcError> {
     token_request(
         http,
         &[
@@ -238,18 +330,40 @@ pub async fn exchange_code(http: &reqwest::Client, client_id: &str, code: &str, 
 }
 
 /// Refresh without `scope` so the existing grant is kept.
-pub async fn refresh(http: &reqwest::Client, client_id: &str, refresh_token: &str) -> Result<TokenResponse, SiwcError> {
-    token_request(http, &[("grant_type", "refresh_token"), ("client_id", client_id), ("refresh_token", refresh_token), ("resource", RESOURCE)]).await
+#[allow(clippy::result_large_err)]
+pub async fn refresh(
+    http: &reqwest::Client,
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<TokenResponse, SiwcError> {
+    token_request(
+        http,
+        &[
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id),
+            ("refresh_token", refresh_token),
+            ("resource", RESOURCE),
+        ],
+    )
+    .await
 }
 
 /// Revokes the renewable session. Ok(true) when the server confirmed (HTTP 200).
 pub async fn revoke(http: &reqwest::Client, client_id: &str, refresh_token: &str) -> bool {
-    let Ok(d) = discovery(http).await else { return false };
-    let Some(endpoint) = d.revocation_endpoint else { return false };
+    let Ok(d) = discovery(http).await else {
+        return false;
+    };
+    let Some(endpoint) = d.revocation_endpoint else {
+        return false;
+    };
     for attempt in 0..3 {
         let res = http
             .post(&endpoint)
-            .form(&[("token", refresh_token), ("token_type_hint", "refresh_token"), ("client_id", client_id)])
+            .form(&[
+                ("token", refresh_token),
+                ("token_type_hint", "refresh_token"),
+                ("client_id", client_id),
+            ])
             .send()
             .await;
         match res {
@@ -271,16 +385,47 @@ pub struct IdClaims {
 }
 
 /// Verifies signature (JWKS), issuer, audience (= issued client id), expiry and nonce.
-pub async fn verify_id_token(http: &reqwest::Client, id_token: &str, client_id: &str, nonce: Option<&str>) -> Result<IdClaims, SiwcError> {
+#[allow(clippy::result_large_err)]
+pub async fn verify_id_token(
+    http: &reqwest::Client,
+    id_token: &str,
+    client_id: &str,
+    nonce: Option<&str>,
+) -> Result<IdClaims, SiwcError> {
     use jsonwebtoken::{decode, decode_header, jwk::JwkSet, Algorithm, DecodingKey, Validation};
-    let unavailable = || SiwcError::new("identity_unavailable", "本人確認を一時的に行えません。少し待ってからもう一度試してください");
-    let invalid = |why: &str| SiwcError::new("invalid_id_token", format!("ID トークンを検証できませんでした: {why}"));
+    let unavailable = || {
+        SiwcError::new(
+            "identity_unavailable",
+            "本人確認を一時的に行えません。少し待ってからもう一度試してください",
+        )
+    };
+    let invalid = |why: &str| {
+        SiwcError::new(
+            "invalid_id_token",
+            format!("ID トークンを検証できませんでした: {why}"),
+        )
+    };
     let header = decode_header(id_token).map_err(|_| invalid("ヘッダー"))?;
-    if !matches!(header.alg, Algorithm::RS256 | Algorithm::RS384 | Algorithm::RS512 | Algorithm::ES256 | Algorithm::ES384 | Algorithm::PS256) {
+    if !matches!(
+        header.alg,
+        Algorithm::RS256
+            | Algorithm::RS384
+            | Algorithm::RS512
+            | Algorithm::ES256
+            | Algorithm::ES384
+            | Algorithm::PS256
+    ) {
         return Err(invalid("署名方式"));
     }
     let d = discovery(http).await.map_err(|_| unavailable())?;
-    let jwks: JwkSet = http.get(&d.jwks_uri).send().await.map_err(|_| unavailable())?.json().await.map_err(|_| unavailable())?;
+    let jwks: JwkSet = http
+        .get(&d.jwks_uri)
+        .send()
+        .await
+        .map_err(|_| unavailable())?
+        .json()
+        .await
+        .map_err(|_| unavailable())?;
     let jwk = match &header.kid {
         Some(kid) => jwks.find(kid),
         None if jwks.keys.len() == 1 => jwks.keys.first(),
@@ -303,7 +448,11 @@ pub async fn verify_id_token(http: &reqwest::Client, id_token: &str, client_id: 
 }
 
 pub fn split_scopes(scope: Option<&str>) -> Vec<String> {
-    let mut v: Vec<String> = scope.unwrap_or("").split_whitespace().map(String::from).collect();
+    let mut v: Vec<String> = scope
+        .unwrap_or("")
+        .split_whitespace()
+        .map(String::from)
+        .collect();
     v.sort();
     v.dedup();
     v
@@ -316,7 +465,10 @@ mod tests {
     #[test]
     fn pkce_s256_no_padding() {
         // SHA-256("abc") = ba7816bf...15ad (FIPS 180-2), base64url without padding.
-        assert_eq!(pkce_challenge("abc"), "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0");
+        assert_eq!(
+            pkce_challenge("abc"),
+            "ungWv48Bz-pBQUDeXa4iI7ADYaOWF3qctBD_YfIAFa0"
+        );
         assert_eq!(random_value().len(), 43);
     }
 
@@ -358,7 +510,11 @@ mod tests {
             login_hint: Some("a@b.c"),
             prompt_consent: true,
         });
-        let q: HashMap<_, _> = url::Url::parse(&u).unwrap().query_pairs().into_owned().collect();
+        let q: HashMap<_, _> = url::Url::parse(&u)
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
         assert_eq!(q["client_id"], "oaiapp_x");
         assert!(!q.contains_key("agent_name_hint"));
         assert_eq!(q["id_token_hint"], "tok");
@@ -368,16 +524,73 @@ mod tests {
 
     #[test]
     fn callback_parsing() {
-        let q = parse_callback_request("GET /auth/callback?code=abc&state=xyz&client_id=oaiapp_1 HTTP/1.1").unwrap();
+        let q = parse_callback_request(
+            "GET /auth/callback?code=abc&state=xyz&client_id=oaiapp_1 HTTP/1.1",
+        )
+        .unwrap();
         assert_eq!(q["code"], "abc");
         assert_eq!(q["client_id"], "oaiapp_1");
         assert!(parse_callback_request("GET /callback?code=abc HTTP/1.1").is_none());
         assert!(parse_callback_request("GET /favicon.ico HTTP/1.1").is_none());
     }
 
+    /// A request to the callback path with someone else's state (an old tab, an `<img>` on any page)
+    /// gets 400 and the wait goes on (#30).
+    #[test]
+    fn callback_with_wrong_state_keeps_waiting() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let waiting = std::thread::spawn(move || {
+            wait_for_callback(listener, cancel, Duration::from_secs(5), "good")
+        });
+        let get = |target: &str| {
+            let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(s, "GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n").unwrap();
+            let mut r = String::new();
+            let _ = s.read_to_string(&mut r);
+            r
+        };
+        let stale = get("/auth/callback?code=old&state=stale");
+        let missing = get("/auth/callback?code=old");
+        let good = get("/auth/callback?code=new&state=good");
+        stop.store(true, Ordering::Relaxed);
+        let q = waiting.join().unwrap().unwrap();
+        assert!(stale.starts_with("HTTP/1.1 400"), "{stale}");
+        assert!(missing.starts_with("HTTP/1.1 400"), "{missing}");
+        assert!(good.starts_with("HTTP/1.1 200"), "{good}");
+        assert_eq!(q["state"], "good");
+        assert_eq!(q["code"], "new");
+    }
+
+    #[test]
+    fn callback_state_check() {
+        let done = classify_callback("GET /auth/callback?code=c&state=s1 HTTP/1.1", "s1");
+        assert!(matches!(done, CallbackRequest::Done(q) if q["code"] == "c"));
+        assert_eq!(
+            classify_callback("GET /auth/callback?code=c&state=s0 HTTP/1.1", "s1"),
+            CallbackRequest::WrongState
+        );
+        assert_eq!(
+            classify_callback("GET /auth/callback?error=access_denied HTTP/1.1", "s1"),
+            CallbackRequest::WrongState
+        );
+        assert_eq!(
+            classify_callback("GET /favicon.ico HTTP/1.1", "s1"),
+            CallbackRequest::Other
+        );
+    }
+
     #[test]
     fn error_codes() {
-        assert_eq!(oauth_error_code(r#"{"error":"invalid_grant"}"#).as_deref(), Some("invalid_grant"));
-        assert_eq!(oauth_error_code(r#"{"error":{"code":"refresh_token_reused"}}"#).as_deref(), Some("refresh_token_reused"));
+        assert_eq!(
+            oauth_error_code(r#"{"error":"invalid_grant"}"#).as_deref(),
+            Some("invalid_grant")
+        );
+        assert_eq!(
+            oauth_error_code(r#"{"error":{"code":"refresh_token_reused"}}"#).as_deref(),
+            Some("refresh_token_reused")
+        );
     }
 }

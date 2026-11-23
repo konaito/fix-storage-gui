@@ -4,6 +4,8 @@
  * - 起動時に静かに確認し（失敗しても何も出さない）、メニューやボタンからの手動確認ではエラーや「最新です」も出す。
  * - 見つかったら UpdateBanner がバージョンとリリースノートを出し、「アップデートして再起動」でダウンロード → 置き換え → 再起動。
  * - スキャン・AI 判定・ゴミ箱移動の最中は、App から setUpdateBlocked() で知らせてもらい、インストールを始めない。
+ *   ダウンロードの後、install の直前と relaunch の直前にもう一度見て、作業中なら waiting で止める（自動では再起動しない）。
+ * - ダウンロードからインストールまでの間（updateBlocksWork）は、App の側がスキャン・AI 判定・ゴミ箱移動を始めない。
  *
  * 更新ファイルの検証（署名チェック）はプラグインが tauri.conf.json の公開鍵で行う。ここでは表示と順序だけを扱う。
  */
@@ -24,6 +26,8 @@ export type UpdatePhase =
   | { kind: "available"; info: UpdateInfo }
   | { kind: "downloading"; info: UpdateInfo; downloaded: number; total: number | null }
   | { kind: "installing"; info: UpdateInfo }
+  /** 作業中だったので、install（installed=false）か relaunch（installed=true）の手前で止めている。 */
+  | { kind: "waiting"; info: UpdateInfo; installed: boolean }
   | { kind: "restarting"; info: UpdateInfo }
   | { kind: "error"; during: "check" | "install"; message: string; info: UpdateInfo | null };
 
@@ -124,9 +128,14 @@ export function setUpdateBlocked(reason: string | null) {
   if (state.blockedBy !== reason) set({ blockedBy: reason });
 }
 
+/** ダウンロードからインストール、再起動までの間は true。この間、App はスキャン・AI 判定・ゴミ箱移動を始めない。 */
+export function updateBlocksWork(phase: UpdatePhase): boolean {
+  return phase.kind === "downloading" || phase.kind === "installing" || phase.kind === "restarting";
+}
+
 export function dismissUpdate() {
   const p = state.phase;
-  const info = p.kind === "available" ? p.info : p.kind === "error" ? p.info : null;
+  const info = p.kind === "available" || p.kind === "waiting" ? p.info : p.kind === "error" ? p.info : null;
   set({ dismissedVersion: info?.version ?? state.dismissedVersion, revealed: false, phase: { kind: "idle" } });
 }
 
@@ -150,7 +159,8 @@ function inTauri(): boolean {
 /** アップデートを確認する。manual=false（起動時）は失敗しても静かに idle に戻る。 */
 export async function checkForUpdate(manual: boolean): Promise<void> {
   const k = state.phase.kind;
-  if (k === "checking" || k === "downloading" || k === "installing" || k === "restarting") return;
+  // waiting 中に確認し直すと、ダウンロード済みの Update を close してしまうので確認しない。
+  if (k === "checking" || k === "downloading" || k === "installing" || k === "waiting" || k === "restarting") return;
   if (!inTauri()) return;
   setPhase({ kind: "checking", manual });
   if (manual) set({ revealed: true });
@@ -181,7 +191,10 @@ export async function checkForUpdate(manual: boolean): Promise<void> {
   }
 }
 
-/** ダウンロード → インストール → 再起動。作業中（blockedBy）なら何もしない。 */
+/**
+ * ダウンロード → インストール → 再起動。作業中（blockedBy）なら始めない。
+ * ダウンロード中に作業が始まったときは、install か relaunch の手前で waiting にして止める（#22）。
+ */
 export async function installUpdate(): Promise<void> {
   const p = state.phase;
   const info = p.kind === "available" ? p.info : p.kind === "error" ? p.info : null;
@@ -201,18 +214,49 @@ export async function installUpdate(): Promise<void> {
     const update = pending;
     let prog = { downloaded: 0, total: null as number | null };
     setPhase({ kind: "downloading", info, ...prog });
-    await update.downloadAndInstall((e) => {
+    await update.download((e) => {
       prog = applyDownloadEvent(prog, e as DownloadEvent);
-      if (e.event === "Finished") setPhase({ kind: "installing", info });
-      else setPhase({ kind: "downloading", info, ...prog });
+      setPhase({ kind: "downloading", info, ...prog });
     });
-    setPhase({ kind: "restarting", info });
-    const { relaunch } = await import("@tauri-apps/plugin-process");
-    await relaunch();
+    await installAndRelaunch(update, info, false);
   } catch (e) {
     console.warn("update install failed", e);
     setPhase({ kind: "error", during: "install", message: describeUpdateError(e), info });
   }
+}
+
+/** waiting で止めていた更新を、作業が終わったあとにユーザーの操作で続ける。 */
+export async function resumeUpdate(): Promise<void> {
+  const p = state.phase;
+  if (p.kind !== "waiting" || state.blockedBy) return;
+  if (!p.installed && !pending) return;
+  // 二度押しで install が 2 回走らないよう、await の前にフェーズを変える。
+  setPhase(p.installed ? { kind: "restarting", info: p.info } : { kind: "installing", info: p.info });
+  try {
+    await installAndRelaunch(pending, p.info, p.installed);
+  } catch (e) {
+    console.warn("update install failed", e);
+    setPhase({ kind: "error", during: "install", message: describeUpdateError(e), info: p.info });
+  }
+}
+
+/** blockedBy を見る直前に await を挟まない。App の setUpdateBlocked は描画の後に届くので、ここが最後の確認になる。 */
+async function installAndRelaunch(update: NonNullable<PluginUpdate> | null, info: UpdateInfo, installed: boolean): Promise<void> {
+  if (!installed) {
+    if (state.blockedBy || !update) {
+      setPhase({ kind: "waiting", info, installed: false });
+      return;
+    }
+    setPhase({ kind: "installing", info });
+    await update.install();
+  }
+  const { relaunch } = await import("@tauri-apps/plugin-process");
+  if (state.blockedBy) {
+    setPhase({ kind: "waiting", info, installed: true });
+    return;
+  }
+  setPhase({ kind: "restarting", info });
+  await relaunch();
 }
 
 /** テスト用: ストアを初期状態に戻す。 */

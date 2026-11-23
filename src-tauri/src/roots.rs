@@ -26,7 +26,11 @@ pub struct Root {
 }
 
 fn r(path: String, category: CategoryId) -> Root {
-    Root { path, category, hidden: None }
+    Root {
+        path,
+        category,
+        hidden: None,
+    }
 }
 
 /// macOS roots, same order and content as fix-storage's `roots(home)`.
@@ -64,7 +68,11 @@ pub fn mac_roots(home: &str) -> Vec<Root> {
         r(h("Library/Mobile Documents"), Documents),
         r(h("Library/CloudStorage"), Documents),
         r("/Users/Shared".into(), Documents),
-        Root { path: home.trim_end_matches('/').to_string(), category: Documents, hidden: Some(Developer) },
+        Root {
+            path: home.trim_end_matches('/').to_string(),
+            category: Documents,
+            hidden: Some(Developer),
+        },
         r(h("Music"), Music),
         r(h("Library/Caches"), Caches),
         r(h(".cache"), Caches),
@@ -87,7 +95,7 @@ fn is_within(path: &str, root: &str) -> bool {
 pub fn category_of(path: &str, roots: &[Root]) -> CategoryId {
     let mut best: Option<&Root> = None;
     for root in roots {
-        if is_within(path, &root.path) && best.map_or(true, |b| root.path.len() > b.path.len()) {
+        if is_within(path, &root.path) && best.is_none_or(|b| root.path.len() > b.path.len()) {
             best = Some(root);
         }
     }
@@ -112,12 +120,30 @@ mod tests {
     #[test]
     fn deepest_root_wins() {
         let roots = mac_roots("/Users/a");
-        assert_eq!(category_of("/Users/a/Library/Caches/x", &roots), CategoryId::Caches);
-        assert_eq!(category_of("/Users/a/Library/Developer/Xcode/DerivedData/p", &roots), CategoryId::Caches);
-        assert_eq!(category_of("/Users/a/Library/Developer/Xcode", &roots), CategoryId::Developer);
-        assert_eq!(category_of("/Users/a/project", &roots), CategoryId::Documents);
-        assert_eq!(category_of("/Users/a/.vscode/ext", &roots), CategoryId::Developer);
-        assert_eq!(category_of("/Users/a/.Trash/old", &roots), CategoryId::Trash);
+        assert_eq!(
+            category_of("/Users/a/Library/Caches/x", &roots),
+            CategoryId::Caches
+        );
+        assert_eq!(
+            category_of("/Users/a/Library/Developer/Xcode/DerivedData/p", &roots),
+            CategoryId::Caches
+        );
+        assert_eq!(
+            category_of("/Users/a/Library/Developer/Xcode", &roots),
+            CategoryId::Developer
+        );
+        assert_eq!(
+            category_of("/Users/a/project", &roots),
+            CategoryId::Documents
+        );
+        assert_eq!(
+            category_of("/Users/a/.vscode/ext", &roots),
+            CategoryId::Developer
+        );
+        assert_eq!(
+            category_of("/Users/a/.Trash/old", &roots),
+            CategoryId::Trash
+        );
         assert_eq!(category_of("/System/Library", &roots), CategoryId::System);
         assert_eq!(category_of("/Users/ab", &roots), CategoryId::System);
     }

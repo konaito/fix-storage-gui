@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cliLabel, forDisplay, toRow, withAi } from "../src/lib/rows";
+import { aiSendTargets, cliLabel, forDisplay, toRow, withAi } from "../src/lib/rows";
 import type { ScanItem } from "../src/lib/api";
 
 const DAY = 24 * 3600 * 1000;
@@ -15,6 +15,7 @@ function item(over: Partial<ScanItem> = {}): ScanItem {
     modifiedMs: null,
     lastUsedMs: null,
     blocked: null,
+    shared: false,
     ...over,
   };
 }
@@ -59,5 +60,35 @@ describe("toRow / withAi / forDisplay", () => {
     expect(forDisplay(row, true).final.source).toBe("pending");
     const judged = withAi(row, { id: "1", verdict: "safe", reason: "ok" });
     expect(forDisplay(judged, true)).toBe(judged);
+  });
+});
+
+const cacheItem = (name: string): ScanItem => ({
+  path: `/Users/u/Library/Caches/${name}`,
+  name,
+  size: 1024,
+  dir: false,
+  category: "caches",
+  modifiedMs: null,
+  lastUsedMs: null,
+  blocked: null,
+  shared: false,
+});
+
+describe("AI send targets (#75)", () => {
+  const rows = ["a.zip", "b.zip", "c.zip"].map((n) => toRow(cacheItem(n)));
+
+  it("sends everything when nothing has been judged yet", () => {
+    expect(aiSendTargets(rows).map((r) => r.name)).toEqual(["a.zip", "b.zip", "c.zip"]);
+  });
+
+  it("continues with only the rows the AI has not judged (e.g. after signing in again)", () => {
+    const partly = [withAi(rows[0], { id: "i0", verdict: "safe", reason: "old installer" }), rows[1], rows[2]];
+    expect(aiSendTargets(partly).map((r) => r.name)).toEqual(["b.zip", "c.zip"]);
+  });
+
+  it("judges everything again once every row has a verdict", () => {
+    const all = rows.map((r, i) => withAi(r, { id: `i${i}`, verdict: "safe", reason: "x" }));
+    expect(aiSendTargets(all)).toHaveLength(3);
   });
 });

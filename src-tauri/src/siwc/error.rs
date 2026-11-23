@@ -2,6 +2,8 @@ use serde::Serialize;
 
 /// Error sent to the UI. `kind` drives the recovery UI; the rest is kept for diagnostics
 /// (the docs ask to preserve status, error code and request ID).
+/// It stays unboxed: boxing would change every signature that returns it, so those functions
+/// carry `#[allow(clippy::result_large_err)]` instead (#45).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SiwcError {
@@ -15,7 +17,14 @@ pub struct SiwcError {
 
 impl SiwcError {
     pub fn new(kind: &str, message: impl Into<String>) -> Self {
-        Self { kind: kind.into(), code: None, param: None, status: None, request_id: None, message: message.into() }
+        Self {
+            kind: kind.into(),
+            code: None,
+            param: None,
+            status: None,
+            request_id: None,
+            message: message.into(),
+        }
     }
     pub fn with_code(mut self, code: Option<String>) -> Self {
         self.code = code;
@@ -46,7 +55,9 @@ pub fn kind_for_code(code: &str) -> &'static str {
         "subscription_sharing_unsupported_capability" => "unsupported_capability",
         "subscription_sharing_route_not_supported" => "route_not_supported",
         "subscription_sharing_invalid_user" => "invalid_user",
-        "chatpass_v2_scope_not_authorized" | "chatpass_v2_invalid_authorization_context" => "not_authorized",
+        "chatpass_v2_scope_not_authorized" | "chatpass_v2_invalid_authorization_context" => {
+            "not_authorized"
+        }
         "subscription_sharing_user_unavailable" => "user_unavailable",
         _ => "api_error",
     }
@@ -67,6 +78,11 @@ pub fn kind_for_status(status: u16) -> &'static str {
 pub fn is_terminal_refresh_error(code: &str) -> bool {
     matches!(
         code,
-        "invalid_grant" | "invalid_refresh_token" | "token_expired" | "refresh_token_expired" | "refresh_token_invalidated" | "refresh_token_reused"
+        "invalid_grant"
+            | "invalid_refresh_token"
+            | "token_expired"
+            | "refresh_token_expired"
+            | "refresh_token_invalidated"
+            | "refresh_token_reused"
     )
 }

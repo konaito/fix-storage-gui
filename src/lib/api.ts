@@ -124,6 +124,8 @@ export const api = {
   siwcAckWelcome: () => invoke<void>("siwc_ack_welcome"),
   siwcSignOut: () => invoke<{ remoteRevoked: boolean }>("siwc_sign_out"),
   siwcModels: () => invoke<Model[]>("siwc_models"),
-  siwcRespond: (requestId: string, model: string, instructions: string, input: string) =>
-    invoke<string>("siwc_respond", { requestId, model, instructions, input }),
+  siwcRespond: (requestId: string, clientId: string, model: string, instructions: string, input: string) =>
+    invoke<string>("siwc_respond", { requestId, clientId, model, instructions, input }),
+  /** Drops the HTTP stream of one siwc_respond call (#21). Unknown or finished IDs are ignored. */
+  siwcCancel: (requestId: string) => invoke<void>("siwc_cancel", { requestId }),
 };

@@ -67,8 +67,11 @@ pub fn disk_space() -> Option<DiskSpace> {
         let c = std::ffi::CString::new(path).ok()?;
         let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::statvfs(c.as_ptr(), &mut s) } == 0 {
-            let frsize = s.f_frsize as u64;
-            return Some(DiskSpace { total: s.f_blocks as u64 * frsize, available: s.f_bavail as u64 * frsize });
+            let frsize = s.f_frsize;
+            return Some(DiskSpace {
+                total: s.f_blocks as u64 * frsize,
+                available: s.f_bavail as u64 * frsize,
+            });
         }
     }
     None
@@ -80,9 +83,16 @@ struct DuResult {
 }
 
 fn cpu_time(pid: u32) -> Option<String> {
-    let out = Command::new("ps").args(["-o", "cputime=", "-p", &pid.to_string()]).output().ok()?;
+    let out = Command::new("ps")
+        .args(["-o", "cputime=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Reads du's stderr to the end so du never blocks on a full pipe, keeping only whether
@@ -109,10 +119,23 @@ fn watch_stderr(stderr: impl Read) -> bool {
 /// 5 s apart is waiting on a privacy prompt: kill it and report the folder unreadable
 /// (same rule as fix-storage). A du that cannot be started also counts as unreadable.
 fn du(path: &str, cancel: &AtomicBool) -> DuResult {
-    let child = Command::new("du").args(["-skx", path]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
-    let Ok(mut child) = child else { return DuResult { bytes: 0, denied: true } };
+    let child = Command::new("du")
+        .args(["-skx", path])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let Ok(mut child) = child else {
+        return DuResult {
+            bytes: 0,
+            denied: true,
+        };
+    };
     // stdout is one short line; stderr gets a line per unreadable folder and must be drained.
-    let stderr = child.stderr.take().map(|e| std::thread::spawn(move || watch_stderr(e)));
+    let stderr = child
+        .stderr
+        .take()
+        .map(|e| std::thread::spawn(move || watch_stderr(e)));
     let pid = child.id();
     let watchdog = cfg!(target_os = "macos");
     let mut last_cpu: Option<String> = None;
@@ -130,7 +153,10 @@ fn du(path: &str, cancel: &AtomicBool) -> DuResult {
             if let Some(h) = stderr {
                 let _ = h.join();
             }
-            return DuResult { bytes: 0, denied: false };
+            return DuResult {
+                bytes: 0,
+                denied: false,
+            };
         }
         if watchdog && last_check.elapsed() >= Duration::from_secs(5) {
             last_check = Instant::now();
@@ -152,8 +178,15 @@ fn du(path: &str, cancel: &AtomicBool) -> DuResult {
         Err(_) => String::new(),
     };
     let stderr_denied = stderr.map(|h| h.join().unwrap_or(false)).unwrap_or(false);
-    let kb: u64 = stdout.split_whitespace().next().and_then(|s| s.parse().ok()).unwrap_or(0);
-    DuResult { bytes: kb * 1024, denied: stalled || stderr_denied }
+    let kb: u64 = stdout
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    DuResult {
+        bytes: kb * 1024,
+        denied: stalled || stderr_denied,
+    }
 }
 
 /// Most entries `has_outside_hard_links` reads in one folder before it stops (#34, #79).
@@ -173,15 +206,21 @@ fn is_hard_linked(meta: &fs::Metadata) -> bool {
 /// At `cap` entries it stops and answers from what it has seen, which leans towards true.
 /// On cancel it answers false.
 fn has_outside_hard_links(path: &str, cap: usize, cancel: &AtomicBool) -> bool {
-    let Ok(top) = fs::symlink_metadata(path) else { return false };
+    let Ok(top) = fs::symlink_metadata(path) else {
+        return false;
+    };
     let dev = top.dev();
     let mut stack = vec![std::path::PathBuf::from(path)];
     let mut seen = 0usize;
     // (dev, ino) -> (links found in this folder, nlink)
     let mut links: HashMap<(u64, u64), (u64, u64)> = HashMap::new();
-    let outside = |links: &HashMap<(u64, u64), (u64, u64)>| links.values().any(|(found, nlink)| found < nlink);
+    let outside = |links: &HashMap<(u64, u64), (u64, u64)>| {
+        links.values().any(|(found, nlink)| found < nlink)
+    };
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             if cancel.load(Ordering::Relaxed) {
                 return false;
@@ -193,7 +232,10 @@ fn has_outside_hard_links(path: &str, cap: usize, cancel: &AtomicBool) -> bool {
             // DirEntry::metadata does not follow symlinks.
             let Ok(meta) = entry.metadata() else { continue };
             if is_hard_linked(&meta) {
-                links.entry((meta.dev(), meta.ino())).or_insert((0, meta.nlink())).0 += 1;
+                links
+                    .entry((meta.dev(), meta.ino()))
+                    .or_insert((0, meta.nlink()))
+                    .0 += 1;
             }
             if meta.is_dir() && meta.dev() == dev {
                 stack.push(entry.path());
@@ -204,7 +246,10 @@ fn has_outside_hard_links(path: &str, cap: usize, cancel: &AtomicBool) -> bool {
 }
 
 fn mtime_ms(meta: &fs::Metadata) -> Option<f64> {
-    meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as f64)
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as f64)
 }
 
 /// Parses mdls dates like "2024-03-01 12:34:56 +0000" into ms since epoch (UTC only, which is what mdls prints).
@@ -242,8 +287,17 @@ fn last_used(paths: &[String], on_progress: &dyn Fn(Progress)) -> Vec<Option<f64
         return result;
     }
     for (chunk_i, batch) in paths.chunks(40).enumerate() {
-        on_progress(Progress { phase: "dates", current: batch[0].clone(), done: chunk_i * 40, total: paths.len() });
-        let out = Command::new("mdls").args(["-raw", "-name", "kMDItemLastUsedDate"]).args(batch).stderr(Stdio::null()).output();
+        on_progress(Progress {
+            phase: "dates",
+            current: batch[0].clone(),
+            done: chunk_i * 40,
+            total: paths.len(),
+        });
+        let out = Command::new("mdls")
+            .args(["-raw", "-name", "kMDItemLastUsedDate"])
+            .args(batch)
+            .stderr(Stdio::null())
+            .output();
         let Ok(out) = out else { continue };
         let text = String::from_utf8_lossy(&out.stdout);
         let values: Vec<&str> = text.split('\0').collect();
@@ -286,7 +340,12 @@ fn collect_units(
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        on_progress(Progress { phase: "listing", current: dir.clone(), done: units.len(), total: 0 });
+        on_progress(Progress {
+            phase: "listing",
+            current: dir.clone(),
+            done: units.len(),
+            total: 0,
+        });
         let entries = match fs::read_dir(&dir) {
             Ok(e) => e,
             Err(e) => {
@@ -298,7 +357,11 @@ fn collect_units(
                 } else if let Ok(meta) = fs::symlink_metadata(&dir) {
                     // Whole Mac: a root that does not exist on this Mac is normal and skipped.
                     if meta.is_file() {
-                        units.push(Unit::File(dir.clone(), meta.blocks() * 512, is_hard_linked(&meta)));
+                        units.push(Unit::File(
+                            dir.clone(),
+                            meta.blocks() * 512,
+                            is_hard_linked(&meta),
+                        ));
                     }
                 }
                 continue;
@@ -315,7 +378,11 @@ fn collect_units(
                     continue;
                 }
             };
-            let child = format!("{}/{}", dir.trim_end_matches('/'), entry.file_name().to_string_lossy());
+            let child = format!(
+                "{}/{}",
+                dir.trim_end_matches('/'),
+                entry.file_name().to_string_lossy()
+            );
             if nested_aware && root_paths.contains(&child) {
                 continue;
             }
@@ -335,7 +402,11 @@ fn collect_units(
                     units.push(Unit::Dir(child));
                 }
             } else {
-                units.push(Unit::File(child, meta.blocks() * 512, is_hard_linked(&meta)));
+                units.push(Unit::File(
+                    child,
+                    meta.blocks() * 512,
+                    is_hard_linked(&meta),
+                ));
             }
         }
     }
@@ -350,7 +421,14 @@ pub struct ScanOptions {
     pub limit: usize,
 }
 
-pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn(Progress) + Send + Sync + 'static) -> Result<ScanResult, String> {
+/// (path, size, dir, shared)
+type Measured = (String, u64, bool, bool);
+
+pub fn run_scan(
+    opts: ScanOptions,
+    cancel: Arc<AtomicBool>,
+    on_progress: impl Fn(Progress) + Send + Sync + 'static,
+) -> Result<ScanResult, String> {
     let on_progress = Arc::new(on_progress);
     let roots = mac_roots(&opts.home);
     let root_paths: HashSet<String> = roots.iter().map(|r| r.path.clone()).collect();
@@ -358,23 +436,49 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     let units = match &opts.folder {
         None => {
             let start: Vec<String> = roots.iter().map(|r| r.path.clone()).collect();
-            collect_units(&start, &roots, &root_paths, true, &mut denied, &cancel, &*on_progress)?
+            collect_units(
+                &start,
+                &roots,
+                &root_paths,
+                true,
+                &mut denied,
+                &cancel,
+                &*on_progress,
+            )?
         }
-        Some(folder) => collect_units(&[folder.clone()], &roots, &root_paths, false, &mut denied, &cancel, &*on_progress)?,
+        Some(folder) => collect_units(
+            std::slice::from_ref(folder),
+            &roots,
+            &root_paths,
+            false,
+            &mut denied,
+            &cancel,
+            &*on_progress,
+        )?,
     };
 
     let total = units.len();
-    // (path, size, dir, shared)
-    let measured: Arc<Mutex<Vec<(String, u64, bool, bool)>>> = Arc::new(Mutex::new(Vec::with_capacity(total)));
+    let measured: Arc<Mutex<Vec<Measured>>> = Arc::new(Mutex::new(Vec::with_capacity(total)));
     let denied_m = Arc::new(Mutex::new(denied));
     let queue = Arc::new(Mutex::new(units.into_iter().collect::<VecDeque<_>>()));
     let done = Arc::new(AtomicUsize::new(0));
-    on_progress(Progress { phase: "measuring", current: String::new(), done: 0, total });
+    on_progress(Progress {
+        phase: "measuring",
+        current: String::new(),
+        done: 0,
+        total,
+    });
     let workers = 6;
     let mut handles = Vec::new();
     for _ in 0..workers {
-        let (queue, measured, denied_m, done, cancel, on_progress) =
-            (queue.clone(), measured.clone(), denied_m.clone(), done.clone(), cancel.clone(), on_progress.clone());
+        let (queue, measured, denied_m, done, cancel, on_progress) = (
+            queue.clone(),
+            measured.clone(),
+            denied_m.clone(),
+            done.clone(),
+            cancel.clone(),
+            on_progress.clone(),
+        );
         handles.push(std::thread::spawn(move || loop {
             if cancel.load(Ordering::Relaxed) {
                 return;
@@ -382,15 +486,24 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
             let next = queue.lock().unwrap().pop_front();
             let Some(unit) = next else { return };
             match unit {
-                Unit::File(path, bytes, shared) => measured.lock().unwrap().push((path, bytes, false, shared)),
+                Unit::File(path, bytes, shared) => {
+                    measured.lock().unwrap().push((path, bytes, false, shared))
+                }
                 Unit::Dir(path) => {
-                    on_progress(Progress { phase: "measuring", current: path.clone(), done: done.load(Ordering::Relaxed), total });
+                    on_progress(Progress {
+                        phase: "measuring",
+                        current: path.clone(),
+                        done: done.load(Ordering::Relaxed),
+                        total,
+                    });
                     let r = du(&path, &cancel);
                     if r.denied {
                         denied_m.lock().unwrap().push(path.clone());
                     }
                     // Not after a denied or stalled du: the walk could not be killed if it hung on a privacy prompt.
-                    let shared = !r.denied && !cancel.load(Ordering::Relaxed) && has_outside_hard_links(&path, HARD_LINK_SCAN_CAP, &cancel);
+                    let shared = !r.denied
+                        && !cancel.load(Ordering::Relaxed)
+                        && has_outside_hard_links(&path, HARD_LINK_SCAN_CAP, &cancel);
                     measured.lock().unwrap().push((path, r.bytes, true, shared));
                 }
             }
@@ -404,18 +517,28 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
 
     let mut list = std::mem::take(&mut *measured.lock().unwrap());
     list.retain(|(_, size, _, _)| *size >= opts.min_size);
-    list.sort_by(|a, b| b.1.cmp(&a.1));
+    list.sort_by_key(|b| std::cmp::Reverse(b.1));
     list.truncate(opts.limit);
 
     let paths: Vec<String> = list.iter().map(|(p, _, _, _)| p.clone()).collect();
     let guard = Guard::new(&opts.home, &roots, true);
-    on_progress(Progress { phase: "measuring", current: String::new(), done: done.load(Ordering::Relaxed), total });
+    on_progress(Progress {
+        phase: "measuring",
+        current: String::new(),
+        done: done.load(Ordering::Relaxed),
+        total,
+    });
     // A cancelled scan (stopped by the user or replaced by a new scan) returns at once, without dates.
     let used = if cancelled {
         vec![None; paths.len()]
     } else {
         let used = last_used(&paths, &*on_progress);
-        on_progress(Progress { phase: "dates", current: String::new(), done: paths.len(), total: paths.len() });
+        on_progress(Progress {
+            phase: "dates",
+            current: String::new(),
+            done: paths.len(),
+            total: paths.len(),
+        });
         used
     };
     let items = list
@@ -440,7 +563,12 @@ pub fn run_scan(opts: ScanOptions, cancel: Arc<AtomicBool>, on_progress: impl Fn
     let mut denied = std::mem::take(&mut *denied_m.lock().unwrap());
     denied.sort();
     denied.dedup();
-    Ok(ScanResult { items, denied, disk: disk_space(), cancelled })
+    Ok(ScanResult {
+        items,
+        denied,
+        disk: disk_space(),
+        cancelled,
+    })
 }
 
 #[cfg(test)]
@@ -449,8 +577,14 @@ mod tests {
 
     #[test]
     fn mdls_dates() {
-        assert_eq!(parse_mdls_date("1970-01-02 00:00:00 +0000"), Some(86_400_000.0));
-        assert_eq!(parse_mdls_date("2024-03-01 12:00:00 +0000"), Some(1_709_294_400_000.0));
+        assert_eq!(
+            parse_mdls_date("1970-01-02 00:00:00 +0000"),
+            Some(86_400_000.0)
+        );
+        assert_eq!(
+            parse_mdls_date("2024-03-01 12:00:00 +0000"),
+            Some(1_709_294_400_000.0)
+        );
         assert_eq!(parse_mdls_date("(null)"), None);
     }
 
@@ -464,7 +598,12 @@ mod tests {
         let seen: Arc<Mutex<Vec<&'static str>>> = Arc::default();
         let seen2 = seen.clone();
         let res = run_scan(
-            ScanOptions { home: "/nonexistent-home".into(), folder: Some(dir.to_string_lossy().into()), min_size: 0, limit: 100 },
+            ScanOptions {
+                home: "/nonexistent-home".into(),
+                folder: Some(dir.to_string_lossy().into()),
+                min_size: 0,
+                limit: 100,
+            },
             Arc::new(AtomicBool::new(false)),
             move |p| seen2.lock().unwrap().push(p.phase),
         )
@@ -510,7 +649,12 @@ mod tests {
             let _ = fs::set_permissions(d, std::os::unix::fs::PermissionsExt::from_mode(0o755));
         }
         let _ = fs::remove_dir_all(&dir);
-        assert!(r.bytes >= 5_000_000, "size was {} after {:?}", r.bytes, took);
+        assert!(
+            r.bytes >= 5_000_000,
+            "size was {} after {:?}",
+            r.bytes,
+            took
+        );
         assert!(r.denied, "unreadable subfolders are reported");
     }
 
@@ -518,11 +662,16 @@ mod tests {
     #[test]
     fn missing_folder_is_an_error() {
         let res = run_scan(
-            ScanOptions { home: "/nonexistent-home".into(), folder: Some("/nonexistent/zzz".into()), min_size: 0, limit: 100 },
+            ScanOptions {
+                home: "/nonexistent-home".into(),
+                folder: Some("/nonexistent/zzz".into()),
+                min_size: 0,
+                limit: 100,
+            },
             Arc::new(AtomicBool::new(false)),
             |_| {},
         );
-        let err = res.err().expect("missing folder looked like an empty folder");
+        let err = res.expect_err("missing folder looked like an empty folder");
         assert!(err.contains("/nonexistent/zzz"), "{err}");
     }
 
@@ -535,7 +684,12 @@ mod tests {
         let seen: Arc<Mutex<Vec<&'static str>>> = Arc::default();
         let seen2 = seen.clone();
         let res = run_scan(
-            ScanOptions { home: "/nonexistent-home".into(), folder: Some(dir.to_string_lossy().into()), min_size: 0, limit: 100 },
+            ScanOptions {
+                home: "/nonexistent-home".into(),
+                folder: Some(dir.to_string_lossy().into()),
+                min_size: 0,
+                limit: 100,
+            },
             Arc::new(AtomicBool::new(true)),
             move |p| seen2.lock().unwrap().push(p.phase),
         )
@@ -543,8 +697,14 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let phases = seen.lock().unwrap().clone();
         assert!(res.cancelled);
-        assert!(!phases.contains(&"listing"), "listing ran after cancel: {phases:?}");
-        assert!(!phases.contains(&"dates"), "dates ran after cancel: {phases:?}");
+        assert!(
+            !phases.contains(&"listing"),
+            "listing ran after cancel: {phases:?}"
+        );
+        assert!(
+            !phases.contains(&"dates"),
+            "dates ran after cancel: {phases:?}"
+        );
     }
 
     /// #34: one file hard-linked into three folders. du counts it in full for each folder,
@@ -558,23 +718,44 @@ mod tests {
         fs::write(dir.join("store/blob.bin"), vec![3u8; 1_000_000]).unwrap();
         fs::hard_link(dir.join("store/blob.bin"), dir.join("proj1/blob.bin")).unwrap();
         fs::create_dir_all(dir.join("proj2/deep/er")).unwrap();
-        fs::hard_link(dir.join("store/blob.bin"), dir.join("proj2/deep/er/blob.bin")).unwrap();
+        fs::hard_link(
+            dir.join("store/blob.bin"),
+            dir.join("proj2/deep/er/blob.bin"),
+        )
+        .unwrap();
         fs::hard_link(dir.join("store/blob.bin"), dir.join("loose.bin")).unwrap();
         fs::write(dir.join("plain/own.bin"), vec![4u8; 1_000_000]).unwrap();
         fs::write(dir.join("alone.bin"), vec![5u8; 1_000_000]).unwrap();
         let res = run_scan(
-            ScanOptions { home: "/nonexistent-home".into(), folder: Some(dir.to_string_lossy().into()), min_size: 0, limit: 100 },
+            ScanOptions {
+                home: "/nonexistent-home".into(),
+                folder: Some(dir.to_string_lossy().into()),
+                min_size: 0,
+                limit: 100,
+            },
             Arc::new(AtomicBool::new(false)),
             |_| {},
         )
         .unwrap();
         let _ = fs::remove_dir_all(&dir);
-        let shared = |name: &str| res.items.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("{name} missing")).shared;
+        let shared = |name: &str| {
+            res.items
+                .iter()
+                .find(|i| i.name == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+                .shared
+        };
         for name in ["store", "proj1", "proj2", "loose.bin"] {
-            assert!(shared(name), "{name} holds a hard link but is not marked shared");
+            assert!(
+                shared(name),
+                "{name} holds a hard link but is not marked shared"
+            );
         }
         for name in ["plain", "alone.bin"] {
-            assert!(!shared(name), "{name} has no hard links but is marked shared");
+            assert!(
+                !shared(name),
+                "{name} has no hard links but is marked shared"
+            );
         }
     }
 
@@ -596,16 +777,33 @@ mod tests {
         fs::write(dir.join("mixed/r.bin"), vec![9u8; 1_000_000]).unwrap();
         fs::hard_link(dir.join("mixed/r.bin"), dir.join("out2/r.bin")).unwrap();
         let res = run_scan(
-            ScanOptions { home: "/nonexistent-home".into(), folder: Some(dir.to_string_lossy().into()), min_size: 0, limit: 100 },
+            ScanOptions {
+                home: "/nonexistent-home".into(),
+                folder: Some(dir.to_string_lossy().into()),
+                min_size: 0,
+                limit: 100,
+            },
             Arc::new(AtomicBool::new(false)),
             |_| {},
         )
         .unwrap();
         let _ = fs::remove_dir_all(&dir);
-        let shared = |name: &str| res.items.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("{name} missing")).shared;
-        assert!(!shared("inside"), "inside links only to itself but is marked shared");
+        let shared = |name: &str| {
+            res.items
+                .iter()
+                .find(|i| i.name == name)
+                .unwrap_or_else(|| panic!("{name} missing"))
+                .shared
+        };
+        assert!(
+            !shared("inside"),
+            "inside links only to itself but is marked shared"
+        );
         for name in ["out1", "out2", "mixed"] {
-            assert!(shared(name), "{name} links to a path outside it but is not marked shared");
+            assert!(
+                shared(name),
+                "{name} links to a path outside it but is not marked shared"
+            );
         }
     }
 
@@ -633,12 +831,20 @@ mod tests {
         assert!(!capped);
         assert!(!cancelled);
         assert!(!inside_full);
-        assert!(inside_half, "stopped after one of two inside links, so the other may be outside");
+        assert!(
+            inside_half,
+            "stopped after one of two inside links, so the other may be outside"
+        );
     }
 
     fn scan_folder(home: &str, folder: &str) -> ScanResult {
         run_scan(
-            ScanOptions { home: home.into(), folder: Some(folder.into()), min_size: 0, limit: 100 },
+            ScanOptions {
+                home: home.into(),
+                folder: Some(folder.into()),
+                min_size: 0,
+                limit: 100,
+            },
             Arc::new(AtomicBool::new(false)),
             |_| {},
         )
@@ -665,7 +871,10 @@ mod tests {
         // With no usable home folder, nothing is offered.
         for bad in ["", "/"] {
             let res = scan_folder(bad, &format!("{h}/Downloads"));
-            assert!(!res.items.is_empty() && res.items.iter().all(|i| i.blocked.is_some()), "home={bad:?}");
+            assert!(
+                !res.items.is_empty() && res.items.iter().all(|i| i.blocked.is_some()),
+                "home={bad:?}"
+            );
         }
         let _ = fs::remove_dir_all(&home);
     }

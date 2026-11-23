@@ -1,0 +1,8 @@
+# git blame で飛ばすコミット。整形だけで動きを変えないコミットを書く。
+# 手元で使うには: git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub の blame 画面は、このファイルを自動で読む。
+
+# Rust のコードに cargo fmt をかける（#82）
+78f4545985b35ddbdc603161e90640a7411f3b4f
+# main の取り込み後にかけ直した cargo fmt（#82）
+ca0c6cc4f7bfbdd9d032af2e48724516ef1c3e9c
