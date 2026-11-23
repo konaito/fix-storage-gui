@@ -23,29 +23,43 @@ import { afterScan, type HistoryOp } from "./flow/scanNav";
 import { withAllSafe } from "./flow/selection";
 import { effectiveSort, type SortMode } from "./flow/order";
 import { canGo, flowReducer, initialFlow, type StepId } from "./flow/steps";
-import { api, isSiwcError, type EnvInfo, type Model, type ScanProgress, type SiwcStatus, type TrashOutcome, type TrashProgress } from "./lib/api";
-import { describeError } from "./lib/errors";
+import { api, isSiwcError, type EnvInfo, type Model, type ScanProgress, type TrashOutcome, type TrashProgress } from "./lib/api";
+import { describeError, revealFailedJa } from "./lib/errors";
 import { formatBytes } from "./lib/format";
-import { forDisplay, toRow, withAi, type Row } from "./lib/rows";
+import { aiSendTargets, forDisplay, toRow, withAi, type Row } from "./lib/rows";
 import { selectable } from "./safety/merge";
 import { UpdateCheckButton } from "./components/UpdateBanner";
-import { setUpdateBlocked } from "./lib/updater";
+import { getUpdateState, setUpdateBlocked, updateBlocksWork, useUpdateState } from "./lib/updater";
 
 const PROVIDER: JudgeProvider = chatGptProvider;
 const BATCH = 25;
 
 export default function App() {
   const [env, setEnv] = useState<EnvInfo | null>(null);
-  const [status, setStatus] = useState<SiwcStatus | null>(null);
+  // Sign-in state is owned by the login gate (#29, #30); the app only reads it.
+  const gate = useGate();
+  const { status, signingIn, refreshStatus, reportApp } = gate;
   const [models, setModels] = useState<Model[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  // Loading the model list failed or it came back empty: no AI run can start, so the list must not wait for one (#26).
+  const [modelsFailed, setModelsFailed] = useState(false);
   const [model, setModel] = useState("");
-  const [signingIn, setSigningIn] = useState(false);
 
   const [flow, dispatch] = useReducer(flowReducer, initialFlow);
   const [barSlot, setBarSlot] = useState<HTMLDivElement | null>(null);
+  const busyLabel = flow.busy === "scan" ? "スキャン中" : flow.busy === "ai" ? "AI 判定中" : flow.busy === "trash" ? "ゴミ箱へ移動中" : null;
   // アプリ内アップデートは、スキャン・AI 判定・ゴミ箱移動の最中は始めない（src/lib/updater.ts）。
-  useEffect(() => setUpdateBlocked(flow.busy === "scan" ? "スキャン中" : flow.busy === "ai" ? "AI 判定中" : flow.busy === "trash" ? "ゴミ箱へ移動中" : null), [flow.busy]);
+  useEffect(() => setUpdateBlocked(busyLabel), [busyLabel]);
+  // With a scan result, a token that stops working keeps this screen under a sign-in-again bar (#75).
+  useEffect(() => reportApp(flow.hasScan || !!flow.busy, busyLabel), [reportApp, flow.hasScan, flow.busy, busyLabel]);
+  useEffect(() => () => reportApp(false, null), [reportApp]);
+  // 逆に、更新のダウンロードから再起動までの間は、スキャン・AI 判定・ゴミ箱移動を始めない（#22）。
+  const updateBusy = updateBlocksWork(useUpdateState().phase);
+  function blockedByUpdate(): boolean {
+    if (!updateBlocksWork(getUpdateState().phase)) return false;
+    setNotice("アップデートのダウンロードとインストールが終わるまで、スキャン・AI 判定・ゴミ箱への移動は始められません。");
+    return true;
+  }
 
   const [target, setTarget] = useState<Target>({ kind: "mac" });
   const [lastFolder, setLastFolder] = useState<string | null>(null);
@@ -55,6 +69,8 @@ export default function App() {
   const [scanStartedAt, setScanStartedAt] = useState(0);
   const [cancelling, setCancelling] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
+  /** Id of the latest scan. Progress events from any other scan are ignored. */
+  const scanIdRef = useRef(0);
   const [rows, setRows] = useState<Row[]>([]);
   const [denied, setDenied] = useState<string[]>([]);
   const [partial, setPartial] = useState(false);
@@ -70,7 +86,8 @@ export default function App() {
   const [aiDialog, setAiDialog] = useState(false);
   const [aiRun, setAiRun] = useState<AiRun | null>(null);
   const [aiOutcome, setAiOutcome] = useState<AiOutcome | null>(null);
-  const aiStop = useRef(false);
+  // Stopping the AI run aborts this; runBatches returns without waiting for requests in flight (#21).
+  const aiAbort = useRef<AbortController | null>(null);
   // Signed-in users with plan usage: open the AI send dialog once after each scan (#12). Cancelling does not reopen it.
   const [autoAi, setAutoAi] = useState(false);
 
@@ -83,27 +100,18 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refreshStatus = useCallback(async () => {
-    try {
-      setStatus(await api.siwcStatus());
-    } catch (e) {
-      setError(describeError(e));
-    }
-  }, []);
-
   const active = status?.accounts.find((a) => a.clientId === status.active);
   const signedIn = !!active?.signedIn;
-  // AI judgement needs both this app's view of the account and the login gate's plan-use consent.
-  const gate = useGate();
   const planReady = gate.planEnabled && signedIn && !!active?.planEnabled;
-  useEffect(() => {
-    if (gate.statusVersion > 0) void refreshStatus();
-  }, [gate.statusVersion, refreshStatus]);
 
-  // What every step shows and acts on: with plan usage, rows the AI has not judged are "未判定" and can't be selected (#12).
-  const view = useMemo(() => rows.map((r) => forDisplay(r, planReady)), [rows, planReady]);
+  // What every step shows and acts on: with plan usage, rows the AI has not judged are "未判定" and can't be selected (#12),
+  // unless this list fell back to the rules' verdict (no models, the AI ended in an error, or the user skipped it: #26).
+  const requireAi = planReady && !flow.ruleOnly;
+  const view = useMemo(() => rows.map((r) => forDisplay(r, requireAi)), [rows, requireAi]);
   // AI review targets: everything not locked by the hard block list or fix-storage's rules.
   const aiTargets = useMemo(() => view.filter((r) => !r.final.locked), [view]);
+  // What the next run sends (and the send dialog shows): only the rows the AI has not judged yet (#75).
+  const aiQueue = useMemo(() => aiSendTargets(aiTargets), [aiTargets]);
   useEffect(() => {
     dispatch({ type: "mode", aiFirst: planReady, aiTargets: aiTargets.length });
     if (!planReady) setAutoAi(false);
@@ -116,9 +124,11 @@ export default function App() {
     try {
       const list = await api.siwcModels();
       setModels(list);
+      setModelsFailed(list.length === 0);
       setModel((cur) => (list.some((m) => m.slug === cur) ? cur : (list[0]?.slug ?? "")));
     } catch (e) {
       setModels([]);
+      setModelsFailed(true);
       handleAiError(e);
     } finally {
       setModelsLoading(false);
@@ -128,59 +138,63 @@ export default function App() {
 
   useEffect(() => {
     api.envInfo().then(setEnv).catch((e) => setError(describeError(e)));
-    void refreshStatus();
-    const un1 = listen<ScanProgress>("scan-progress", (e) => setProgress(e.payload));
+    const un1 = listen<ScanProgress>("scan-progress", (e) => {
+      if (e.payload.scanId === scanIdRef.current) setProgress(e.payload);
+    });
     const un2 = listen<TrashProgress>("trash-progress", (e) => setTrashProgress(e.payload));
     return () => {
       void un1.then((f) => f());
       void un2.then((f) => f());
     };
-  }, [refreshStatus]);
+  }, []);
 
   // Refresh the model list whenever the active account changes.
   useEffect(() => {
     if (planReady) void loadModels();
-    else setModels([]);
+    else {
+      setModels([]);
+      setModelsFailed(false);
+    }
   }, [planReady, status?.active, loadModels]);
+
+  useEffect(() => dispatch({ type: "models", available: !modelsFailed }), [modelsFailed]);
 
   function handleAiError(e: unknown) {
     if (isSiwcError(e)) {
       if (e.kind === "usage_limit") setUsageLimit(true);
-      if (e.kind === "reauth_required" || e.kind === "plan_not_enabled") void refreshStatus();
+      // The gate also hears "reauth" from Rust (#29), but maybe after this status read: tell it first so
+      // the results stay on screen (#75). Reading status here also covers plan_not_enabled.
+      if (e.kind === "reauth_required") gate.signInLost("reauth");
+      if (e.kind === "client_revoked") gate.signInLost("client_revoked");
+      if (e.kind === "reauth_required" || e.kind === "client_revoked" || e.kind === "plan_not_enabled") void refreshStatus();
     }
     setError(describeError(e));
   }
 
   async function signIn(clientId: string | null, promptConsent: boolean) {
+    if (flow.busy) return;
     setError(null);
-    setSigningIn(true);
-    try {
-      const acc = await api.siwcSignIn(clientId, promptConsent);
-      if (!acc.planEnabled) setNotice("サインインしました。ただし ChatGPT プランの利用は許可されていません。");
-    } catch (e) {
-      handleAiError(e);
-    } finally {
-      setSigningIn(false);
-      await refreshStatus();
-    }
+    const r = await gate.signIn(clientId, promptConsent);
+    if (!r.started) return;
+    if (r.error) handleAiError(r.error);
+    else if (r.account && !r.account.planEnabled) setNotice("サインインしました。ただし ChatGPT プランの利用は許可されていません。");
   }
 
+  // After a successful sign-out the gate shows the login screen with its own notice.
   async function signOut() {
-    try {
-      const r = await api.siwcSignOut();
-      setNotice(
-        r.remoteRevoked
-          ? "サインアウトしました。"
-          : "このMacのトークンは消しましたが、ChatGPT 側での接続解除を確認できませんでした。必要なら ChatGPT の設定からこのアプリの接続を解除してください。",
-      );
-    } catch (e) {
-      setError(describeError(e));
-    }
-    await refreshStatus();
+    if (flow.busy) return;
+    const e = await gate.signOut();
+    if (e) setError(describeError(e));
+  }
+
+  async function switchAccount(clientId: string) {
+    if (flow.busy) return;
+    const e = await gate.switchAccount(clientId);
+    if (e) setError(describeError(e));
   }
 
   async function runScan(t: Target, op: HistoryOp) {
-    if (flow.busy) return;
+    if (flow.busy || blockedByUpdate()) return;
     const nav = { target, scanned, history };
     const hadScan = flow.hasScan;
     // The scanning step shows this target, also when going up (#37).
@@ -191,8 +205,9 @@ export default function App() {
     setCancelling(false);
     setScanStartedAt(Date.now());
     dispatch({ type: "scanStart" });
+    const scanId = ++scanIdRef.current;
     try {
-      const res = await api.scan(t.kind === "folder" ? t.path : null, minSize);
+      const res = await api.scan(t.kind === "folder" ? t.path : null, minSize, scanId);
       const after = afterScan(nav, t, op, true, hadScan);
       setHistory(after.history);
       setScanned(after.scanned);
@@ -229,17 +244,21 @@ export default function App() {
 
   function goUp() {
     const prev = history[history.length - 1];
-    if (!prev) return;
+    if (!prev || blockedByUpdate()) return;
     void runScan(prev, "pop");
   }
 
   async function sendToAi(mask: boolean) {
     setAiDialog(false);
-    if (!env || !model || flow.busy || !planReady) return;
+    // Every batch of this run goes to the account it started with (#28).
+    const clientId = status?.active;
+    if (!env || !model || flow.busy || !planReady || !clientId || blockedByUpdate()) return;
     const maskOpts = { enabled: mask, home: env.home, user: env.user };
-    const indexed = aiTargets.map((r, i) => ({ id: `i${i}`, row: r }));
+    const indexed = aiQueue.map((r, i) => ({ id: `i${i}`, row: r }));
+    if (indexed.length === 0) return;
     const batches = chunk(indexed, BATCH);
-    aiStop.current = false;
+    const abort = new AbortController();
+    aiAbort.current = abort;
     setAiOutcome(null);
     setAiRun({
       done: 0,
@@ -255,6 +274,8 @@ export default function App() {
     dispatch({ type: "aiStart" });
     const results = new Map<string, AiJudgement>();
     let missing = 0;
+    let failed = 0;
+    let failedReason: string | null = null;
     let stopped = false;
     let err: string | null = null;
     try {
@@ -262,10 +283,10 @@ export default function App() {
         batches,
         concurrency: DEFAULT_CONCURRENCY,
         itemCount: (batch) => batch.length,
-        shouldStop: () => aiStop.current,
-        send: (batch, _index, onChars) => {
+        signal: abort.signal,
+        send: (batch, _index, onChars, signal) => {
           const payload = batch.map(({ id, row }) => toPayload(id, row, maskOpts));
-          return PROVIDER.judge(payload, { model, onProgress: onChars });
+          return PROVIDER.judge(payload, { model, clientId, onProgress: onChars, signal });
         },
         onBatchComplete: (_index, judged, batch) => {
           const byId = new Map(judged.map((j) => [j.id, j]));
@@ -292,6 +313,9 @@ export default function App() {
         },
       });
       stopped = outcome.stopped;
+      // Batches that failed twice stay unjudged; the rest of the run went on (#27).
+      failed = outcome.failed.reduce((n, f) => n + batches[f.index].length, 0);
+      failedReason = outcome.failed.length > 0 ? describeError(outcome.failed[outcome.failed.length - 1].error) : null;
       if (outcome.error) {
         handleAiError(outcome.error);
         err = describeError(outcome.error);
@@ -300,19 +324,27 @@ export default function App() {
       handleAiError(e);
       err = describeError(e);
     } finally {
+      if (aiAbort.current === abort) aiAbort.current = null;
       setAiRun(null);
-      setAiOutcome({ judged: results.size, missing, stopped, error: err });
-      dispatch({ type: "aiEnd", ok: !err && results.size > 0 });
+      setAiOutcome({ judged: results.size, missing, failed, failedReason, stopped, error: err });
+      // An error (usage limit, sign-in, every batch failed) opens the list with the rules' verdict for the rest (#26).
+      dispatch({ type: "aiEnd", ok: !err && results.size > 0, error: !!err || (!stopped && results.size === 0 && failed > 0) });
     }
   }
 
   // Open the send dialog by itself once the AI step is up and a model is ready.
   useEffect(() => {
-    if (autoAi && flow.step === "ai" && !flow.busy && planReady && !!model && !!env && aiTargets.length > 0) {
+    if (autoAi && flow.step === "ai" && !flow.busy && !updateBusy && !flow.ruleOnly && planReady && !!model && !!env && aiTargets.length > 0) {
       setAutoAi(false);
       setAiDialog(true);
     }
-  }, [autoAi, flow.step, flow.busy, planReady, model, env, aiTargets.length]);
+  }, [autoAi, flow.step, flow.busy, updateBusy, flow.ruleOnly, planReady, model, env, aiTargets.length]);
+
+  /** "AI なしで一覧へ": this list only shows the rules' verdict for items the AI has not judged (#26). */
+  function skipAi() {
+    setAutoAi(false);
+    dispatch({ type: "skipAi" });
+  }
 
   // Drop selections that new verdicts (or a rescan) no longer allow.
   useEffect(() => {
@@ -328,7 +360,7 @@ export default function App() {
   const trashing = useRef(false);
 
   async function doTrash() {
-    if (chosen.length === 0) return;
+    if (chosen.length === 0 || blockedByUpdate()) return;
     if (trashing.current) return;
     trashing.current = true;
     const sizeOf = new Map(chosen.map((r) => [r.path, r.size]));
@@ -384,6 +416,7 @@ export default function App() {
           minSize={minSize}
           onMinSize={setMinSize}
           onStart={() => {
+            if (blockedByUpdate()) return;
             void runScan(target, "reset");
           }}
           disk={disk}
@@ -416,6 +449,7 @@ export default function App() {
           partial={partial}
           aiDone={flow.aiDone}
           aiFirst={flow.aiFirst}
+          ruleOnly={flow.ruleOnly}
           selected={selected}
           onToggle={toggle}
           onSelectPaths={selectPaths}
@@ -424,14 +458,16 @@ export default function App() {
           canGoUp={history.length > 0}
           onGoUp={goUp}
           onDrill={(path) => {
+            if (blockedByUpdate()) return;
             setTarget({ kind: "folder", path });
             void runScan({ kind: "folder", path }, "push");
           }}
           onRescan={() => void runScan(scanned, "keep")}
           onChangeTarget={() => go("target")}
-          aiTargets={aiTargets.length}
+          aiTargets={flow.aiDone ? aiTargets.length : aiQueue.length}
           onGoAi={() => go("ai")}
           onGoTrash={() => go("trash")}
+          onReveal={(path) => void api.revealInFinder(path).catch((e) => setError(revealFailedJa(e)))}
           home={env?.home ?? null}
           view={reviewView}
           onView={setReviewView}
@@ -444,6 +480,8 @@ export default function App() {
       page = (
         <AiStep
           aiFirst={flow.aiFirst}
+          ruleOnly={flow.ruleOnly}
+          onSkipAi={skipAi}
           canGoReview={canGo(flow, "review", chosen.length)}
           onBack={() => dispatch({ type: "back", selected: chosen.length })}
           planReady={planReady}
@@ -451,7 +489,8 @@ export default function App() {
           modelName={modelInfo?.displayName ?? null}
           modelsLoading={modelsLoading}
           destination={PROVIDER.destination}
-          targets={aiTargets.length}
+          targets={aiQueue.length}
+          alreadyJudged={aiTargets.length - aiQueue.length}
           batchSize={BATCH}
           running={aiRun}
           outcome={aiOutcome}
@@ -459,7 +498,7 @@ export default function App() {
           selectedCount={chosen.length}
           onOpenSend={() => setAiDialog(true)}
           onStop={() => {
-            aiStop.current = true;
+            aiAbort.current?.abort();
             setAiRun((s) => (s ? { ...s, stopRequested: true } : s));
           }}
           onGoReview={() => go("review")}
@@ -550,9 +589,10 @@ export default function App() {
             model={model}
             onModel={setModel}
             signingIn={signingIn}
+            locked={flow.busy === "ai" ? "AI 判定中" : flow.busy === "scan" ? "スキャン中" : flow.busy === "trash" ? "ゴミ箱へ移動中" : null}
             onSignIn={(id, consent) => void signIn(id, consent)}
-            onCancelSignIn={() => void api.siwcCancelSignIn()}
-            onSwitch={(id) => void api.siwcSwitch(id).then(refreshStatus)}
+            onCancelSignIn={gate.cancelSignIn}
+            onSwitch={(id) => void switchAccount(id)}
             onSignOut={() => void signOut()}
             onManageUsage={() => void api.openUsage()}
             onReloadModels={() => void loadModels()}
@@ -580,7 +620,7 @@ export default function App() {
 
       {aiDialog && env && planReady && (
         <AiSendDialog
-          rows={aiTargets}
+          rows={aiQueue}
           provider={PROVIDER}
           model={modelInfo}
           home={env.home}

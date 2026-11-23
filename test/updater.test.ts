@@ -18,7 +18,9 @@ import {
   getUpdateState,
   installUpdate,
   NOTES_END_MARKER,
+  resumeUpdate,
   setUpdateBlocked,
+  updateBlocksWork,
   type DownloadEvent,
 } from "../src/lib/updater";
 
@@ -29,10 +31,11 @@ function fakeUpdate(events: DownloadEvent[], fail?: Error) {
     date: "2026-12-01T00:00:00Z",
     body: `## 変更点\n- **新機能** を追加\n${NOTES_END_MARKER}\n### 開き方\n.dmg を開いて…`,
     close: vi.fn(async () => {}),
-    downloadAndInstall: vi.fn(async (cb: (e: DownloadEvent) => void) => {
-      for (const e of events) cb(e);
+    download: vi.fn(async (cb?: (e: DownloadEvent) => void) => {
+      for (const e of events) cb?.(e);
       if (fail) throw fail;
     }),
+    install: vi.fn(async () => {}),
   };
 }
 
@@ -103,7 +106,8 @@ describe("updater store", () => {
     const ph = getUpdateState().phase;
     expect(ph).toMatchObject({ kind: "available", info: { version: "0.3.0", currentVersion: "0.2.0", notes: "変更点\n- 新機能 を追加" } });
     await installUpdate();
-    expect(u.downloadAndInstall).toHaveBeenCalledTimes(1);
+    expect(u.download).toHaveBeenCalledTimes(1);
+    expect(u.install).toHaveBeenCalledTimes(1);
     expect(mocks.relaunch).toHaveBeenCalledTimes(1);
     expect(getUpdateState().phase.kind).toBe("restarting");
   });
@@ -114,11 +118,12 @@ describe("updater store", () => {
     await checkForUpdate(true);
     setUpdateBlocked("スキャン中");
     await installUpdate();
-    expect(u.downloadAndInstall).not.toHaveBeenCalled();
+    expect(u.download).not.toHaveBeenCalled();
     expect(getUpdateState().phase.kind).toBe("available");
     setUpdateBlocked(null);
     await installUpdate();
-    expect(u.downloadAndInstall).toHaveBeenCalledTimes(1);
+    expect(u.download).toHaveBeenCalledTimes(1);
+    expect(u.install).toHaveBeenCalledTimes(1);
   });
 
   it("install failure shows error and retry re-checks then installs", async () => {
@@ -131,8 +136,86 @@ describe("updater store", () => {
     expect(mocks.relaunch).not.toHaveBeenCalled();
     await installUpdate();
     expect(mocks.check).toHaveBeenCalledTimes(2);
-    expect(good.downloadAndInstall).toHaveBeenCalledTimes(1);
+    expect(good.download).toHaveBeenCalledTimes(1);
+    expect(good.install).toHaveBeenCalledTimes(1);
     expect(mocks.relaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not relaunch when work starts while the update is downloading (#22)", async () => {
+    // download / install / downloadAndInstall のどれで呼ばれても、ダウンロードの途中でスキャンが始まる。
+    const events: DownloadEvent[] = [
+      { event: "Started", data: { contentLength: 100 } },
+      { event: "Progress", data: { chunkLength: 50 } },
+      { event: "Progress", data: { chunkLength: 50 } },
+      { event: "Finished" },
+    ];
+    const run = async (cb?: (e: DownloadEvent) => void) => {
+      for (const e of events) {
+        cb?.(e);
+        if (e.event === "Progress") setUpdateBlocked("スキャン中");
+      }
+    };
+    const u = {
+      ...fakeUpdate([]),
+      download: vi.fn(run),
+      install: vi.fn(async () => {}),
+      downloadAndInstall: vi.fn(run),
+    };
+    mocks.check.mockResolvedValue(u);
+    await checkForUpdate(true);
+    await installUpdate();
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+    expect(getUpdateState().phase.kind).not.toBe("restarting");
+    // 作業が終わるまで install もしない。終わっても自動では再起動せず、ユーザーが押してから進む。
+    expect(u.install).not.toHaveBeenCalled();
+    expect(getUpdateState().phase).toMatchObject({ kind: "waiting", installed: false });
+    await resumeUpdate();
+    expect(u.install).not.toHaveBeenCalled();
+    setUpdateBlocked(null);
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+    await resumeUpdate();
+    expect(u.install).toHaveBeenCalledTimes(1);
+    expect(mocks.relaunch).toHaveBeenCalledTimes(1);
+    expect(getUpdateState().phase.kind).toBe("restarting");
+  });
+
+  it("does not relaunch when work starts while installing; restarts after the user resumes", async () => {
+    const u = fakeUpdate([{ event: "Finished" }]);
+    u.install.mockImplementation(async () => setUpdateBlocked("ゴミ箱へ移動中"));
+    mocks.check.mockResolvedValue(u);
+    await checkForUpdate(true);
+    await installUpdate();
+    expect(u.install).toHaveBeenCalledTimes(1);
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+    expect(getUpdateState().phase).toMatchObject({ kind: "waiting", installed: true });
+    setUpdateBlocked(null);
+    await resumeUpdate();
+    expect(u.install).toHaveBeenCalledTimes(1);
+    expect(mocks.relaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it("a manual check while waiting keeps the downloaded update", async () => {
+    const u = fakeUpdate([{ event: "Progress", data: { chunkLength: 1 } }]);
+    u.download.mockImplementation(async () => setUpdateBlocked("スキャン中"));
+    mocks.check.mockResolvedValue(u);
+    await checkForUpdate(true);
+    await installUpdate();
+    expect(getUpdateState().phase.kind).toBe("waiting");
+    await checkForUpdate(true);
+    expect(mocks.check).toHaveBeenCalledTimes(1);
+    expect(u.close).not.toHaveBeenCalled();
+    expect(getUpdateState().phase.kind).toBe("waiting");
+  });
+
+  it("updateBlocksWork is true only from download to restart", () => {
+    const info = { version: "0.3.0", currentVersion: "0.2.0", notes: "", date: null };
+    expect(updateBlocksWork({ kind: "downloading", info, downloaded: 0, total: null })).toBe(true);
+    expect(updateBlocksWork({ kind: "installing", info })).toBe(true);
+    expect(updateBlocksWork({ kind: "restarting", info })).toBe(true);
+    expect(updateBlocksWork({ kind: "available", info })).toBe(false);
+    expect(updateBlocksWork({ kind: "waiting", info, installed: false })).toBe(false);
+    expect(updateBlocksWork({ kind: "error", during: "install", message: "", info })).toBe(false);
+    expect(updateBlocksWork({ kind: "idle" })).toBe(false);
   });
 
   it("'あとで' hides that version for the rest of the session's automatic checks", async () => {

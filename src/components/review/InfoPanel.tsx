@@ -3,7 +3,7 @@ import { api, type PreviewResult } from "../../lib/api";
 import { describeError } from "../../lib/errors";
 import { agoJa, formatBytes, isoDate } from "../../lib/format";
 import { kindLabel, locationParts } from "../../lib/kind";
-import { AI_VERDICT_JA, CATEGORY_JA, CLI_VERDICT_JA, sourceJa, verdictClass, verdictJa, whyNotSelectable } from "../../lib/labels";
+import { AI_VERDICT_JA, CATEGORY_JA, CLI_VERDICT_JA, SHARED_NOTE_JA, sourceJa, verdictClass, verdictJa, whyNotSelectable } from "../../lib/labels";
 import type { Row } from "../../lib/rows";
 import { selectable } from "../../safety/merge";
 import { useGate } from "../GateContext";
@@ -16,6 +16,8 @@ interface Props {
   selected: boolean;
   onToggle: (path: string) => void;
   onDrill: (path: string) => void;
+  /** Shows the item in Finder; a failure is reported by the caller (#63). */
+  onReveal: (path: string) => void;
 }
 
 type PreviewState = { path: string; loading: boolean; result: PreviewResult | null; error: string | null };
@@ -60,7 +62,7 @@ function fmtDate(ms: number | null | undefined): string {
   return d ? `${d}（${agoJa(ms)}）` : "—";
 }
 
-export function InfoPanel({ row, home, selected, onToggle, onDrill }: Props) {
+export function InfoPanel({ row, home, selected, onToggle, onDrill, onReveal }: Props) {
   const [pv, cancel, retry] = usePreview(row?.path ?? null);
   const { ruleOnly } = useGate();
   if (!row) {
@@ -137,6 +139,7 @@ export function InfoPanel({ row, home, selected, onToggle, onDrill }: Props) {
               </div>
             )}
             {row.dir && <div className="muted tiny">ディスク上の使用量（du で計測）</div>}
+            {row.shared && <div className="warn tiny">{SHARED_NOTE_JA}（ハードリンクがあり、ほかの場所と中身を共有しています）</div>}
           </dd>
           <dt>場所</dt>
           <dd className="crumbs" title={row.path}>
@@ -205,7 +208,7 @@ export function InfoPanel({ row, home, selected, onToggle, onDrill }: Props) {
       </details>
 
       <div className="info-actions">
-        <button type="button" onClick={() => void api.revealInFinder(row.path)}>
+        <button type="button" onClick={() => onReveal(row.path)}>
           Finder で表示
         </button>
         {row.dir && (
