@@ -34,3 +34,12 @@ export function forDisplay(row: Row, requireAi: boolean): Row {
   if (!requireAi || row.ai) return row;
   return { ...row, final: mergeVerdict({ blocked: row.blocked, category: row.category, cli: row.cli, requireAi }) };
 }
+
+/**
+ * What one AI run sends: the rows the AI has not judged yet, so a run cut short (a token that stopped
+ * working, a stop, an error) continues where it ended (#75). Once every row has a verdict, all of them.
+ */
+export function aiSendTargets(targets: Row[]): Row[] {
+  const pending = targets.filter((r) => !r.ai);
+  return pending.length > 0 ? pending : targets;
+}

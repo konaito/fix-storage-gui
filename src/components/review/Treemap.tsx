@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { neighborTile, tabStopTile, tileKeyAction } from "../../flow/a11y";
 import { layoutTreemap, type SortMode } from "../../flow/order";
 import type { Bucket } from "../../flow/progress";
 import { middleEllipsis } from "../../flow/treemap";
@@ -36,6 +37,14 @@ export function Treemap({ rows, mode, focus, selected, onFocus, onToggle, onDril
   const byPath = useMemo(() => new Map(rows.map((r) => [r.path, r])), [rows]);
   const layout = useMemo(() => layoutTreemap(rows, mode, box.w, box.h), [rows, mode, box.w, box.h]);
   const hidden = layout.tiles.filter((t) => t.w < 6 || t.h < 6).length;
+  // Keyboard: the map is one Tab stop (roving tabindex) and the arrow keys move between the drawn tiles (#43).
+  const drawn = useMemo(() => layout.tiles.filter((t) => byPath.has(t.id) && t.w >= 6 && t.h >= 6), [layout, byPath]);
+  const tabStop = tabStopTile(drawn.map((t) => t.id), focus);
+  const tileEls = useRef(new Map<string, HTMLDivElement>());
+  const moveTo = (id: string | null | undefined) => {
+    if (!id) return;
+    tileEls.current.get(id)?.focus(); // the tile's focus handler shows its detail
+  };
 
   return (
     <div className="treemap-shell">
@@ -68,21 +77,39 @@ export function Treemap({ rows, mode, focus, selected, onFocus, onToggle, onDril
           return (
             <div
               key={t.id}
-              role="button"
-              tabIndex={0}
-              aria-pressed={focus === r.path}
-              aria-label={`${r.name}、${formatBytes(r.size)}、${BUCKET_JA[t.bucket]}${on ? "、ゴミ箱の候補" : ""}`}
+              ref={(el) => {
+                if (el) tileEls.current.set(t.id, el);
+                else tileEls.current.delete(t.id);
+              }}
+              // Checked = in the trash candidates. Which tile's detail is shown is a separate state (aria-current).
+              role="checkbox"
+              aria-checked={on}
+              aria-disabled={t.selectable ? undefined : true}
+              aria-current={focus === r.path ? "true" : undefined}
+              tabIndex={t.id === tabStop ? 0 : -1}
+              aria-label={`${r.name}、${formatBytes(r.size)}、${BUCKET_JA[t.bucket]}${t.selectable ? "" : "、選べません"}`}
               title={`${r.path}\n${formatBytes(r.size)}・${BUCKET_JA[t.bucket]}${t.selectable ? "" : "（選べません）"}${r.dir ? "\nダブルクリックで中を見る" : ""}`}
               className={`tile ${t.bucket} ${focus === r.path ? "focus" : ""} ${on ? "on" : ""}`}
               style={{ left: t.x + GAP / 2, top: t.y + GAP / 2, width: w, height: h }}
-              onClick={() => onFocus(r.path)}
+              onFocus={() => onFocus(r.path)}
+              onClick={(e) => {
+                // A mouse click shows the detail. A click with detail 0 is not from a mouse; it is expected to come from
+                // assistive technology pressing the checkbox, so it toggles like Space does (not checked with VoiceOver).
+                if (e.detail === 0 && t.selectable) onToggle(r.path);
+                else onFocus(r.path);
+              }}
               onDoubleClick={() => r.dir && onDrill(r.path)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") onFocus(r.path);
-                if (e.key === " " && t.selectable) {
-                  e.preventDefault();
-                  onToggle(r.path);
-                }
+                const a = tileKeyAction(e.key);
+                if (!a || e.altKey || e.ctrlKey || e.metaKey) return;
+                // A div gets no synthetic click from Enter / Space, so each key fires exactly one action here.
+                e.preventDefault();
+                if (a.kind === "toggle") {
+                  if (t.selectable && !e.repeat) onToggle(r.path);
+                } else if (a.kind === "detail") onFocus(r.path);
+                else if (a.kind === "first") moveTo(drawn[0]?.id);
+                else if (a.kind === "last") moveTo(drawn[drawn.length - 1]?.id);
+                else moveTo(neighborTile(drawn, t.id, a.dir));
               }}
             >
               {(big || mid) && (
@@ -94,17 +121,18 @@ export function Treemap({ rows, mode, focus, selected, onFocus, onToggle, onDril
               )}
               {t.selectable ? (
                 (w >= 26 && h >= 26) || on ? (
-                  <button
-                    type="button"
+                  // Mouse-only shortcut: the tile itself is the checkbox for the keyboard and screen readers.
+                  <span
                     className="tile-check"
-                    aria-label={on ? `${r.name} を候補から外す` : `${r.name} をゴミ箱の候補に入れる`}
+                    aria-hidden="true"
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={(e) => {
                       e.stopPropagation();
                       onToggle(r.path);
                     }}
                   >
                     {on ? "✓" : ""}
-                  </button>
+                  </span>
                 ) : null
               ) : (
                 w >= 22 && h >= 22 && (
@@ -141,7 +169,7 @@ export function Treemap({ rows, mode, focus, selected, onFocus, onToggle, onDril
             {BUCKET_JA.pending}
           </span>
         )}
-        <span className="muted">面積＝サイズ・クリックで詳細・右上の○でゴミ箱の候補に追加・フォルダはダブルクリックで中へ</span>
+        <span className="muted">面積＝サイズ・クリックで詳細・右上の○でゴミ箱の候補に追加・フォルダはダブルクリックで中へ・矢印キーで移動、Space で候補に追加</span>
         {hidden > 0 && <span className="muted">（小さすぎて描けない {hidden} 件はリスト表示で確認できます）</span>}
       </div>
     </div>

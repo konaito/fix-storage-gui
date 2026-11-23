@@ -84,6 +84,7 @@ pub fn http_error(status: u16, request_id: Option<String>, body: &str) -> SiwcEr
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub async fn list_models(http: &reqwest::Client, token: &str) -> Result<Vec<Model>, SiwcError> {
     let res = http
         .get(MODELS_URL)
@@ -232,8 +233,22 @@ fn output_text(response: &Value) -> String {
 }
 
 /// Streams one request to completion. Success only after `response.completed`.
+#[allow(clippy::result_large_err)]
 pub async fn respond(
     http: &reqwest::Client,
+    token: &str,
+    model: &str,
+    instructions: &str,
+    input: &str,
+    on_delta: impl FnMut(usize),
+) -> Result<String, SiwcError> {
+    respond_to(http, RESPONSES_URL, token, model, instructions, input, on_delta).await
+}
+
+/// `respond` against any URL (tests point it at a local server).
+pub(crate) async fn respond_to(
+    http: &reqwest::Client,
+    url: &str,
     token: &str,
     model: &str,
     instructions: &str,
@@ -241,7 +256,7 @@ pub async fn respond(
     mut on_delta: impl FnMut(usize),
 ) -> Result<String, SiwcError> {
     let res = http
-        .post(RESPONSES_URL)
+        .post(url)
         .bearer_auth(token)
         .header("Accept", "text/event-stream")
         .json(&request_body(model, instructions, input))
