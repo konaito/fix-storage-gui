@@ -152,6 +152,19 @@ git push origin "v$VERSION"
 
 Release ワークフローは Release をドラフトで作り、`latest.json` の検査が通ってから公開します。検査やビルドで落ちたときは Release が公開されないので、利用者には配られません（ドラフトの Release が残ることがあります）。原因を直したら、同じタグのワークフローを再実行します。tauri-action は同じタグのドラフトを使い回し、同じ名前のアセットを上げ直します。
 
+### リポジトリの設定（main の保護とマージ済みブランチの削除）
+
+`scripts/repo-settings.sh` は、GitHub のリポジトリ設定を次の3点にそろえます。引数なしで走らせると、変える内容を表示するだけで何も変えません。
+
+- マージ済みの PR の head ブランチを削除します。開いている PR の head か base になっているブランチと、マージ後にコミットが足されたブランチは残します。
+- `delete_branch_on_merge` を true にします。
+- main に ruleset `protect-main` を作ります。PR を必須にし、`Build macOS` の `build` ジョブを必須のチェックにします。承認の数は 0 で、管理者も main へ直接 push できなくなります。
+
+```bash
+scripts/repo-settings.sh          # dry-run（表示だけ）
+scripts/repo-settings.sh --apply  # 実際に変える
+```
+
 ## 公証の有効化手順
 
 [Tauri 公式の macOS 署名ドキュメント](https://v2.tauri.app/distribute/sign/macos/) に沿った手順です。Mac が必要です。
