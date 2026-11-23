@@ -1,6 +1,6 @@
 name: Build macOS
 
-# main への push ごとに、テストと universal の .app / .dmg ビルドを行い artifact に保存する（署名なし・ad-hoc 署名）。
+# main への push、PR、手動実行のたびに、テストと universal の .app / .dmg ビルドを行い artifact に保存する（署名なし・ad-hoc 署名）。
 on:
   push:
     branches: [main]
@@ -22,6 +22,9 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
+      # 版番号（package.json、package-lock.json、tauri.conf.json、Cargo.toml、Cargo.lock）がそろっているか。依存が要らないので先に走らせる。
+      - name: Check version is the same in all files
+        run: node scripts/check-version.mjs
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin

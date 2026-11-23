@@ -2,6 +2,14 @@ import type { AiJudgement, AiVerdict } from "./provider";
 
 const VERDICTS: AiVerdict[] = ["safe", "caution", "keep"];
 
+/** The reply could not be read as the expected JSON. runBatches retries such a batch once (#27). */
+export class JudgementParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "JudgementParseError";
+  }
+}
+
 /**
  * Parses the model's JSON reply. Tolerates code fences and stray text around the object.
  * Unknown ids and malformed entries are dropped; invalid verdicts are dropped (never guessed).
@@ -10,16 +18,16 @@ export function parseJudgements(text: string, allowedIds: Set<string>): AiJudgem
   let s = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   const start = s.indexOf("{");
   const end = s.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("AI の応答に JSON が見つかりませんでした");
+  if (start < 0 || end <= start) throw new JudgementParseError("AI の応答に JSON が見つかりませんでした");
   s = s.slice(start, end + 1);
   let data: unknown;
   try {
     data = JSON.parse(s);
   } catch {
-    throw new Error("AI の応答を JSON として読めませんでした");
+    throw new JudgementParseError("AI の応答を JSON として読めませんでした");
   }
   const items = (data as { items?: unknown }).items;
-  if (!Array.isArray(items)) throw new Error("AI の応答に items がありません");
+  if (!Array.isArray(items)) throw new JudgementParseError("AI の応答に items がありません");
   const seen = new Set<string>();
   const out: AiJudgement[] = [];
   for (const raw of items) {

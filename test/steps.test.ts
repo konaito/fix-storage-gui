@@ -161,7 +161,7 @@ describe("signed-in users: AI judgement comes before the list (#12)", () => {
     const judged = run([{ type: "aiStart" }, { type: "aiEnd", ok: true }, { type: "go", to: "review", selected: 0 }], scannedAi);
     expect(backTarget(judged)).toBe("ai");
   });
-  it("the AI step is never shown as skipped", () => {
+  it("a stopped AI run (not skipped) shows the AI step done", () => {
     const judged = run([{ type: "aiStart" }, { type: "aiEnd", ok: false }, { type: "go", to: "review", selected: 0 }], scannedAi);
     expect(stepStatus(judged, "ai")).toBe("done");
     expect(stepStatus(scannedAi, "review")).toBe("upcoming");
@@ -170,6 +170,78 @@ describe("signed-in users: AI judgement comes before the list (#12)", () => {
     const s = run([{ type: "mode", aiFirst: true, aiTargets: 4 }], scanned);
     expect(s.step).toBe("ai");
     expect(canGo(s, "review", 0)).toBe(false);
+  });
+  describe("no dead end without the AI (#26)", () => {
+    it("the model list failing after the scan opens the list with rule judgement", () => {
+      const s = run([{ type: "models", available: false }], scannedAi);
+      expect(s.step).toBe("ai");
+      expect(s.ruleOnly).toBe(true);
+      expect(canGo(s, "review", 0)).toBe(true);
+      expect(canGo(s, "trash", 2)).toBe(true);
+      expect(run([{ type: "go", to: "review", selected: 0 }], s).step).toBe("review");
+    });
+    it("the model list failing before the scan does too", () => {
+      const s = run([{ type: "models", available: false }, { type: "scanStart" }, { type: "scanEnd", ok: true, aiTargets: 40 }], ai);
+      expect(s).toMatchObject({ step: "ai", ruleOnly: true });
+      expect(canGo(s, "review", 0)).toBe(true);
+    });
+    it("models coming back do not close the list again, and the next scan asks the AI again", () => {
+      const s = run([{ type: "models", available: false }, { type: "models", available: true }], scannedAi);
+      expect(canGo(s, "review", 0)).toBe(true);
+      const again = run([{ type: "scanStart" }, { type: "scanEnd", ok: true, aiTargets: 3 }], s);
+      expect(again).toMatchObject({ step: "ai", ruleOnly: false });
+      expect(canGo(again, "review", 0)).toBe(false);
+    });
+    it("an AI run that ends in an error falls back to rule judgement", () => {
+      const s = run([{ type: "aiStart" }, { type: "aiEnd", ok: false, error: true }], scannedAi);
+      expect(s).toMatchObject({ aiSettled: true, ruleOnly: true });
+      const stopped = run([{ type: "aiStart" }, { type: "aiEnd", ok: false }], scannedAi);
+      expect(stopped.ruleOnly).toBe(false);
+    });
+    it("a plan user can skip the AI for this list only", () => {
+      const s = run([{ type: "skipAi" }], scannedAi);
+      expect(s).toMatchObject({ step: "review", ruleOnly: true, aiSettled: true, aiDone: false });
+      const again = run([{ type: "scanStart" }, { type: "scanEnd", ok: true, aiTargets: 3 }], s);
+      expect(again).toMatchObject({ step: "ai", ruleOnly: false });
+    });
+    it("a failed rescan keeps the rule judgement of the list it returns to", () => {
+      const s = run([{ type: "skipAi" }, { type: "scanStart" }, { type: "scanEnd", ok: false }], scannedAi);
+      expect(s).toMatchObject({ step: "review", ruleOnly: true });
+    });
+    it("turning AI off and on again (account switch) keeps the list open", () => {
+      const s = run([{ type: "skipAi" }, { type: "mode", aiFirst: false, aiTargets: 4 }, { type: "mode", aiFirst: true, aiTargets: 4 }], scannedAi);
+      expect(s.ruleOnly).toBe(true);
+      expect(canGo(s, "review", 0)).toBe(true);
+    });
+    it("skipping does nothing while busy or without a list", () => {
+      expect(run([{ type: "skipAi" }], ai).ruleOnly).toBe(false);
+      const busy = run([{ type: "aiStart" }, { type: "skipAi" }], scannedAi);
+      expect(busy).toMatchObject({ busy: "ai", ruleOnly: false });
+    });
+  });
+  describe("the stepper shows a skipped AI step as skipped (#81)", () => {
+    const toReview: FlowEvent = { type: "go", to: "review", selected: 0 };
+    it("skipping the AI marks the AI step skipped, also further on", () => {
+      const s = run([{ type: "skipAi" }], scannedAi);
+      expect(stepStatus(s, "ai")).toBe("skipped");
+      expect(stepStatus(run([{ type: "go", to: "trash", selected: 1 }], s), "ai")).toBe("skipped");
+    });
+    it("no models, or an AI run that ended in an error, also shows skipped once the list is open", () => {
+      const noModels = run([{ type: "models", available: false }], scannedAi);
+      expect(stepStatus(noModels, "ai")).toBe("current");
+      expect(stepStatus(run([toReview], noModels), "ai")).toBe("skipped");
+      const errored = run([{ type: "aiStart" }, { type: "aiEnd", ok: false, error: true }, toReview], scannedAi);
+      expect(stepStatus(errored, "ai")).toBe("skipped");
+    });
+    it("skipping only the rest after a partial AI run keeps the AI step done", () => {
+      const s = run([{ type: "aiStart" }, { type: "aiEnd", ok: true }, { type: "skipAi" }], scannedAi);
+      expect(s.ruleOnly).toBe(true);
+      expect(stepStatus(s, "ai")).toBe("done");
+    });
+    it("a new scan that asks the AI again shows the AI step as current, not skipped", () => {
+      const s = run([{ type: "skipAi" }, { type: "scanStart" }, { type: "scanEnd", ok: true, aiTargets: 3 }], scannedAi);
+      expect(stepStatus(s, "ai")).toBe("current");
+    });
   });
   it("rule-only users keep the old order", () => {
     expect(scanned.step).toBe("review");
