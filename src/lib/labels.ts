@@ -68,3 +68,7 @@ export function sourceJa(f: FinalVerdict, short = false): string {
 
 /** Group names in the list, the treemap and the summary cards. */
 export const BUCKET_JA: Record<Bucket, string> = { ...AI_VERDICT_JA, locked: "保護", pending: "未判定" };
+
+/** Shown wherever a size counts an item that holds hard links (#34): du counts the shared blocks in full for every item. */
+export const SHARED_JA = "共有あり";
+export const SHARED_NOTE_JA = "共有あり。空く量は少ないことがある";
